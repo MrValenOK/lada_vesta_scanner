@@ -1,15 +1,23 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bluetooth_classic_serial/flutter_bluetooth_classic.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+// ===== КОНФИГУРАЦИЯ ВЕРСИИ И OTA (GITHUB RELEASES) =====
+const String kAppVersion = '1.0.0';
+const String kGithubRepo = 'MrValenOK/lada_vesta_scanner';
+const String kDirectApkFallbackUrl =
+    'https://github.com/$kGithubRepo/releases/latest/download/app-debug.apk';
 
 void main() {
   runApp(const VestaScannerApp());
 }
 
-// ===== 1. ДИЗАЙН: ТЁПЛЫЙ МИНИМАЛИЗМ (Светлая и Тёмная темы из макета) =====
+// ===== 1. ДИЗАЙН: ТЁПЛЫЙ МИНИМАЛИЗМ (Светлая и Тёмная темы) =====
 class AppColors {
   // Светлая тема
   static const lightBg = Color(0xFFFAFAF7);
@@ -103,7 +111,7 @@ class VestaScannerApp extends StatefulWidget {
 }
 
 class _VestaScannerAppState extends State<VestaScannerApp> {
-  bool _isDark = true; // По умолчанию включаем благородную тёмную тему
+  bool _isDark = true;
 
   @override
   Widget build(BuildContext context) {
@@ -193,6 +201,18 @@ class _ScannerHomePageState extends State<ScannerHomePage>
   int? _rpm, _ect, _iat, _map;
   double? _volt, _stft, _ltft, _adv, _tps, _o2Voltage, _evapPurge;
 
+  // Погодный ориентир из интернета (Open-Meteo)
+  double? _weatherTemp;
+  String _weatherCity = '';
+
+  // OTA-обновление (GitHub Releases)
+  bool _isCheckingUpdate = false;
+  bool _hasNewUpdate = false;
+  String _latestGithubVersion = kAppVersion;
+  String _latestReleaseNotes = 'Описание релиза отсутствует';
+  String _latestApkUrl = kDirectApkFallbackUrl;
+  String _latestPublishedAt = '';
+
   // Диагностика и журнал
   String _ecuId = 'Не прочитан';
   List<String> _dtcList = [];
@@ -218,6 +238,10 @@ class _ScannerHomePageState extends State<ScannerHomePage>
       }
     });
     _initBluetooth();
+    _fetchAmbientWeather();
+    Future.delayed(const Duration(seconds: 2), () {
+      _checkForOtaUpdate(silent: true);
+    });
   }
 
   @override
@@ -230,31 +254,340 @@ class _ScannerHomePageState extends State<ScannerHomePage>
   }
 
   // Цветовые хелперы под текущую тему
-  Color get _surface => widget.isDark ? AppColors.darkSurface : AppColors.lightSurface;
-  Color get _surface2 => widget.isDark ? AppColors.darkSurface2 : AppColors.lightSurface2;
-  Color get _text1 => widget.isDark ? AppColors.darkText1 : AppColors.lightText1;
-  Color get _text2 => widget.isDark ? AppColors.darkText2 : AppColors.lightText2;
-  Color get _text3 => widget.isDark ? AppColors.darkText3 : AppColors.lightText3;
-  Color get _border => widget.isDark ? AppColors.darkBorder : AppColors.lightBorder;
+  Color get _surface =>
+      widget.isDark ? AppColors.darkSurface : AppColors.lightSurface;
+  Color get _surface2 =>
+      widget.isDark ? AppColors.darkSurface2 : AppColors.lightSurface2;
+  Color get _text1 =>
+      widget.isDark ? AppColors.darkText1 : AppColors.lightText1;
+  Color get _text2 =>
+      widget.isDark ? AppColors.darkText2 : AppColors.lightText2;
+  Color get _text3 =>
+      widget.isDark ? AppColors.darkText3 : AppColors.lightText3;
+  Color get _border =>
+      widget.isDark ? AppColors.darkBorder : AppColors.lightBorder;
 
   Color get _accent => widget.isDark ? AppColors.darkAccent : AppColors.accent;
-  Color get _accentSoft => widget.isDark ? AppColors.darkAccentSoft : AppColors.accentSoft;
-  Color get _success => widget.isDark ? AppColors.darkSuccess : AppColors.success;
-  Color get _successSoft => widget.isDark ? AppColors.darkSuccessSoft : AppColors.successSoft;
-  Color get _warning => widget.isDark ? AppColors.darkWarning : AppColors.warning;
-  Color get _warningSoft => widget.isDark ? AppColors.darkWarningSoft : AppColors.warningSoft;
+  Color get _accentSoft =>
+      widget.isDark ? AppColors.darkAccentSoft : AppColors.accentSoft;
+  Color get _success =>
+      widget.isDark ? AppColors.darkSuccess : AppColors.success;
+  Color get _successSoft =>
+      widget.isDark ? AppColors.darkSuccessSoft : AppColors.successSoft;
+  Color get _warning =>
+      widget.isDark ? AppColors.darkWarning : AppColors.warning;
+  Color get _warningSoft =>
+      widget.isDark ? AppColors.darkWarningSoft : AppColors.warningSoft;
   Color get _error => widget.isDark ? AppColors.darkError : AppColors.error;
-  Color get _errorSoft => widget.isDark ? AppColors.darkErrorSoft : AppColors.errorSoft;
+  Color get _errorSoft =>
+      widget.isDark ? AppColors.darkErrorSoft : AppColors.errorSoft;
+
+  // ===== OTA ОБНОВЛЕНИЕ ЧЕРЕЗ GITHUB RELEASES =====
+  bool _isVersionHigher(String remote, String local) {
+    final rClean = remote.replaceAll(RegExp(r'[^0-9.]'), '');
+    final lClean = local.replaceAll(RegExp(r'[^0-9.]'), '');
+    final rParts =
+    rClean.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+    final lParts =
+    lClean.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+    final maxLen = max(rParts.length, lParts.length);
+    for (int i = 0; i < maxLen; i++) {
+      final r = i < rParts.length ? rParts[i] : 0;
+      final l = i < lParts.length ? lParts[i] : 0;
+      if (r > l) return true;
+      if (r < l) return false;
+    }
+    return false;
+  }
+
+  Future<void> _checkForOtaUpdate({bool silent = false}) async {
+    if (_isCheckingUpdate) return;
+    if (mounted) setState(() => _isCheckingUpdate = true);
+
+    try {
+      final client = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 8);
+      final req = await client.getUrl(
+        Uri.parse('https://api.github.com/repos/$kGithubRepo/releases/latest'),
+      );
+      req.headers.set('User-Agent', 'VestaScanPro-App');
+      req.headers.set('Accept', 'application/vnd.github+json');
+      final resp = await req.close();
+
+      if (resp.statusCode == 200) {
+        final bodyStr = await resp.transform(utf8.decoder).join();
+        final data = jsonDecode(bodyStr) as Map<String, dynamic>;
+
+        final tagName = (data['tag_name'] ?? kAppVersion).toString();
+        final notes = (data['body'] ?? '').toString().trim();
+        final pubAt = (data['published_at'] ?? '').toString();
+
+        String apkUrl = kDirectApkFallbackUrl;
+        if (data['assets'] is List && (data['assets'] as List).isNotEmpty) {
+          for (final asset in (data['assets'] as List)) {
+            final name = (asset['name'] ?? '').toString().toLowerCase();
+            if (name.endsWith('.apk') &&
+                asset['browser_download_url'] != null) {
+              apkUrl = asset['browser_download_url'].toString();
+              break;
+            }
+          }
+        }
+
+        final isNewer = _isVersionHigher(tagName, kAppVersion);
+
+        if (mounted) {
+          setState(() {
+            _latestGithubVersion = tagName;
+            _latestReleaseNotes =
+            notes.isNotEmpty ? notes : 'Исправления и улучшения VestaScan';
+            _latestApkUrl = apkUrl;
+            _latestPublishedAt =
+            pubAt.length >= 16 ? pubAt.substring(0, 16).replaceAll('T', ' ') : pubAt;
+            _hasNewUpdate = isNewer;
+          });
+        }
+
+        if (isNewer) {
+          _logNuance(
+            'ota_available',
+            'Доступно обновление ПО ($tagName)',
+            'На GitHub опубликована новая версия. Нажмите на иконку облака в шапке приложения для установки.',
+            NuanceSeverity.info,
+            cooldownSec: 300,
+          );
+        }
+      }
+      client.close();
+    } catch (_) {
+      // Игнорируем ошибку при отсутствии интернета
+    } finally {
+      if (mounted) setState(() => _isCheckingUpdate = false);
+      if (!silent && mounted) {
+        _showOtaUpdateDialog();
+      }
+    }
+  }
+
+  Future<void> _downloadAndInstallApk() async {
+    final uri = Uri.parse(_latestApkUrl);
+    final launched = await launchUrl(
+      uri,
+      mode: LaunchMode.externalApplication,
+    );
+    if (!launched) {
+      await Clipboard.setData(ClipboardData(text: _latestApkUrl));
+      _setStatus('Ссылка на APK скопирована в буфер обмена!');
+    }
+  }
+
+  void _showOtaUpdateDialog() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: _surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: const EdgeInsets.all(22),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 42,
+                    height: 42,
+                    decoration: BoxDecoration(
+                      color: _hasNewUpdate ? _successSoft : _accentSoft,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Icon(
+                      Icons.system_update_rounded,
+                      color: _hasNewUpdate ? _success : _accent,
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _hasNewUpdate
+                              ? 'Доступно обновление!'
+                              : 'Центр обновлений (OTA)',
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w700,
+                            color: _text1,
+                          ),
+                        ),
+                        Text(
+                          'Репозиторий: $kGithubRepo',
+                          style: TextStyle(fontSize: 12, color: _text2),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.refresh_rounded, color: _text2),
+                    tooltip: 'Проверить снова',
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _checkForOtaUpdate(silent: false);
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: _surface2,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Установленная версия:',
+                            style: TextStyle(fontSize: 13, color: _text2)),
+                        Text('v$kAppVersion',
+                            style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                color: _text1)),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Версия на GitHub:',
+                            style: TextStyle(fontSize: 13, color: _text2)),
+                        Text(
+                          _latestGithubVersion,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: _hasNewUpdate ? _success : _accent,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_latestPublishedAt.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('Дата сборки на GitHub:',
+                              style: TextStyle(fontSize: 12, color: _text3)),
+                          Text(_latestPublishedAt,
+                              style: TextStyle(fontSize: 12, color: _text2)),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Описание релиза:',
+                style: TextStyle(
+                    fontSize: 12, fontWeight: FontWeight.w600, color: _text2),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _latestReleaseNotes,
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 13, color: _text1),
+              ),
+              const SizedBox(height: 18),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _downloadAndInstallApk();
+                  },
+                  icon: const Icon(Icons.download_rounded),
+                  label: Text(
+                    _hasNewUpdate
+                        ? 'Скачать и установить ($_latestGithubVersion)'
+                        : 'Скачать свежий APK с GitHub принудительно',
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _hasNewUpdate ? _success : _accent,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 15),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ===== ПОЛУЧЕНИЕ УЛИЧНОЙ ТЕМПЕРАТУРЫ ИЗ ИНТЕРНЕТА (ДЛЯ СВЕРКИ ДТОЖ/ДТВ УТРОМ) =====
+  Future<void> _fetchAmbientWeather() async {
+    try {
+      final client = HttpClient()
+        ..connectionTimeout = const Duration(seconds: 6);
+      // Определяем примерные координаты по IP без запроса GPS-разрешений
+      final geoReq = await client.getUrl(Uri.parse('https://ipwho.is/'));
+      final geoResp = await geoReq.close();
+      if (geoResp.statusCode == 200) {
+        final geoData =
+        jsonDecode(await geoResp.transform(utf8.decoder).join());
+        final lat = geoData['latitude'];
+        final lon = geoData['longitude'];
+        final city = (geoData['city'] ?? '').toString();
+
+        if (lat != null && lon != null) {
+          final wReq = await client.getUrl(Uri.parse(
+              'https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current=temperature_2m'));
+          final wResp = await wReq.close();
+          if (wResp.statusCode == 200) {
+            final wData =
+            jsonDecode(await wResp.transform(utf8.decoder).join());
+            final temp = wData['current']?['temperature_2m'];
+            if (temp != null && mounted) {
+              setState(() {
+                _weatherTemp = (temp as num).toDouble();
+                _weatherCity = city;
+              });
+            }
+          }
+        }
+      }
+      client.close();
+    } catch (_) {}
+  }
 
   // ===== 3. БЕЗОПАСНОСТЬ И АВТООПРЕДЕЛЕНИЕ ЭБУ =====
   String _detectEcuType(String id) {
     final upperId = id.toUpperCase();
-    if (upperId.contains('M86') || upperId.contains('I86') || upperId.contains('I765') || upperId.contains('I785')) {
+    if (upperId.contains('M86') ||
+        upperId.contains('I86') ||
+        upperId.contains('I765') ||
+        upperId.contains('I785')) {
       return 'Итэлма М86 (CAN)';
     }
     if (upperId.contains('M74')) return 'Итэлма М74 (CAN/K-Line)';
     if (upperId.contains('ME17')) return 'Bosch ME17.9.7 (CAN)';
-    if (upperId.contains('B774') || upperId.contains('VS51') || upperId.contains('7.9.7')) {
+    if (upperId.contains('B774') ||
+        upperId.contains('VS51') ||
+        upperId.contains('7.9.7')) {
       return 'Bosch 7.9.7 (K-Line)';
     }
     if (upperId.contains('M73')) return 'Итэлма М73 (K-Line)';
@@ -363,7 +696,6 @@ class _ScannerHomePageState extends State<ScannerHomePage>
       await Future.delayed(const Duration(milliseconds: 40));
       final current = _rxBuffer.toString();
       if (current.contains('>')) {
-        // Пауза 150 мс для защиты буфера бюджетных ELM327 от переполнения
         await Future.delayed(const Duration(milliseconds: 150));
         return current
             .replaceAll('>', '')
@@ -402,15 +734,13 @@ class _ScannerHomePageState extends State<ScannerHomePage>
       }
       _isConnected = true;
 
-      // Правильная последовательность инициализации ELM327 для М86
       await _sendObdCommand('ATZ', timeoutMs: 2000);
       await _sendObdCommand('ATE0');
       await _sendObdCommand('ATL0');
       await _sendObdCommand('ATS0');
       await _sendObdCommand('ATH0');
-      await _sendObdCommand('ATSP6'); // CAN 11bit 500kbps
+      await _sendObdCommand('ATSP6');
 
-      // Попытка сразу прочитать ID прошивки
       final idResp = await _sendObdCommand('0904', timeoutMs: 2000);
       final idBytes = _extractBytes(idResp, '4904');
       if (idBytes != null && idBytes.isNotEmpty) {
@@ -586,7 +916,7 @@ class _ScannerHomePageState extends State<ScannerHomePage>
       _logNuance(
         'temp_mismatch',
         'Рассогласование ДТОЖ и ДТВ до пуска',
-        'На заглушенном моторе ОЖ ($ect°C) и Впуск ($_iat°C) отличаются на ${(ect - _iat!).abs()}°C. Если мотор холодный — врет датчик температуры.',
+        'На заглушенном моторе ОЖ ($ect°C) и Впуск ($_iat°C) отличаются на ${(ect - _iat!).abs()}°C. Сверьте с уличным термометром — возможна погрешность датчика.',
         NuanceSeverity.warning,
         cooldownSec: 120,
       );
@@ -659,7 +989,6 @@ class _ScannerHomePageState extends State<ScannerHomePage>
       return;
     }
 
-    // Защита от поднятия оборотов на холодном двигателе
     if (_ect == null || _ect! < 75) {
       _setStatus(
           '⛔ ОПАСНО: Двигатель не прогрет (${_ect ?? 0}°C). Прогрейте минимум до 75°C!');
@@ -681,15 +1010,16 @@ class _ScannerHomePageState extends State<ScannerHomePage>
     final idleStft = <double>[], idleLtft = <double>[], idleMap = <int>[];
     for (int i = 10; i > 0; i--) {
       if (!_isPolling) break;
-      setState(() => _leakTestStatus = 'Этап 1/2 (Холостой ход): осталось $i сек');
+      setState(
+              () => _leakTestStatus = 'Этап 1/2 (Холостой ход): осталось $i сек');
       if (_stft != null) idleStft.add(_stft!);
       if (_ltft != null) idleLtft.add(_ltft!);
       if (_map != null) idleMap.add(_map!);
       await Future.delayed(const Duration(seconds: 1));
     }
 
-    setState(() =>
-    _leakTestStatus = 'Этап 2/2: Плавно поднимите и держите ~2500–3000 об/мин!');
+    setState(() => _leakTestStatus =
+    'Этап 2/2: Плавно поднимите и держите ~2500–3000 об/мин!');
     await Future.delayed(const Duration(seconds: 3));
 
     final revStft = <double>[], revLtft = <double>[];
@@ -744,7 +1074,8 @@ class _ScannerHomePageState extends State<ScannerHomePage>
     }
     setState(() {
       _isRunningStartTest = true;
-      _startTestStatus = 'Запись пуска (20 сек): Заводите двигатель прямо сейчас!';
+      _startTestStatus =
+      'Запись пуска (20 сек): Заводите двигатель прямо сейчас!';
     });
 
     final startEct = _ect ?? 0, startIat = _iat ?? 0;
@@ -769,7 +1100,11 @@ class _ScannerHomePageState extends State<ScannerHomePage>
     final issues = <String>[];
     if ((startEct - startIat).abs() >= 7) {
       issues.add(
-          'Рассогласование ДТОЖ ($startEct°C) и ДТВ ($startIat°C) до старта.');
+          'Рассогласование ДТОЖ ($startEct°C) и ДТВ ($startIat°C) до старта. Сверьте с уличным термометром!');
+    }
+    if (_weatherTemp != null && (startEct - _weatherTemp!).abs() >= 10) {
+      issues.add(
+          'ДТОЖ ($startEct°C) сильно отличается от погодной сводки (${_weatherTemp!.toStringAsFixed(1)}°C). Если мотор остыл за ночь — перепроверьте реальную температуру градусником!');
     }
     if (minVolt < 9.8) {
       issues.add(
@@ -847,7 +1182,7 @@ class _ScannerHomePageState extends State<ScannerHomePage>
 
   Future<void> _exportCsvToClipboard() async {
     final sb = StringBuffer();
-    sb.writeln('=== ЖУРНАЛ НЮАНСОВ (VestaScan M86) ===');
+    sb.writeln('=== ЖУРНАЛ НЮАНСОВ (VestaScan v$kAppVersion) ===');
     for (final e in _nuanceLog) {
       sb.writeln(
           '[${e.timeStr}] [${e.severity.name.toUpperCase()}] ${e.title}: ${e.description} | ${e.snapshot}');
@@ -864,7 +1199,7 @@ class _ScannerHomePageState extends State<ScannerHomePage>
         'Скопировано в буфер (${_nuanceLog.length} событий, ${_blackBox.length} строк CSV)!');
   }
 
-  // ===== 8. ИНТЕРФЕЙС (В ТОЧНОСТИ ПО МАКЕТУ) =====
+  // ===== 8. ИНТЕРФЕЙС =====
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -874,13 +1209,25 @@ class _ScannerHomePageState extends State<ScannerHomePage>
           children: [
             const Text('VestaScan'),
             Text(
-              '$_ecuType · Read-Only',
+              '$_ecuType · v$kAppVersion',
               style: TextStyle(
                   fontSize: 12, fontWeight: FontWeight.w500, color: _text2),
             ),
           ],
         ),
         actions: [
+          IconButton(
+            icon: Badge(
+              isLabelVisible: _hasNewUpdate,
+              backgroundColor: _success,
+              child: Icon(
+                Icons.cloud_download_outlined,
+                color: _hasNewUpdate ? _success : _text1,
+              ),
+            ),
+            tooltip: 'Обновление ПО (GitHub OTA)',
+            onPressed: () => _checkForOtaUpdate(silent: false),
+          ),
           IconButton(
             icon: Icon(widget.isDark ? Icons.light_mode : Icons.dark_mode,
                 color: _text1),
@@ -892,7 +1239,7 @@ class _ScannerHomePageState extends State<ScannerHomePage>
             tooltip: 'Обновить Bluetooth',
             onPressed: _loadPairedDevices,
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 6),
         ],
       ),
       body: Column(
@@ -959,7 +1306,6 @@ class _ScannerHomePageState extends State<ScannerHomePage>
     );
   }
 
-  // Верхняя карточка подключения в стиле макета
   Widget _buildStatusConnectionCard() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -1048,7 +1394,7 @@ class _ScannerHomePageState extends State<ScannerHomePage>
     );
   }
 
-  // ВКЛАДКА 1: ВСЕ 10 ДАТЧИКОВ + БЛОК ДИАГНОСТИКИ ИЗ МАКЕТА
+  // ВКЛАДКА 1: ВСЕ 10 ДАТЧИКОВ + БЛОК ДИАГНОСТИКИ
   Widget _buildSensorsTab() {
     final rpmStatus =
     (_rpm ?? 0) > 950 && (_ect ?? 0) > 80 ? 'warn' : 'normal';
@@ -1143,7 +1489,9 @@ class _ScannerHomePageState extends State<ScannerHomePage>
               value:
               '${_iat ?? "--"}° / ${_tps != null ? _tps!.toStringAsFixed(0) : "--"}',
               unit: '%',
-              norm: 'ДТВ (°C) и Заслонка (%)',
+              norm: _weatherTemp != null
+                  ? 'Улица (API): ${_weatherTemp!.toStringAsFixed(1)}°C'
+                  : 'ДТВ (°C) и Заслонка (%)',
               status: 'normal',
             ),
             _metricCard(
@@ -1188,9 +1536,12 @@ class _ScannerHomePageState extends State<ScannerHomePage>
                 status: _dtcList.isEmpty ? 'good' : 'err',
               ),
               _diagSummaryRow(
-                icon: Icons.memory_rounded,
-                title: 'Прошивка $_ecuId',
-                sub: _ecuType,
+                icon: Icons.thermostat_auto_rounded,
+                title: _weatherTemp != null
+                    ? 'Погода по интернету: ${_weatherTemp!.toStringAsFixed(1)}°C ${_weatherCity.isNotEmpty ? "($_weatherCity)" : ""}'
+                    : 'Сверка температур до холодного пуска',
+                sub:
+                'После ночной стоянки ДТОЖ (${_ect ?? "--"}°C) и ДТВ (${_iat ?? "--"}°C) должны совпадать. При сомнениях сверьте с уличным термометром!',
                 status: 'info',
               ),
               _diagSummaryRow(
@@ -1231,7 +1582,7 @@ class _ScannerHomePageState extends State<ScannerHomePage>
     required String value,
     required String unit,
     required String norm,
-    required String status, // 'normal', 'good', 'warn', 'err'
+    required String status,
   }) {
     Color iconColor = _accent;
     Color iconBg = _accentSoft;
@@ -1386,7 +1737,7 @@ class _ScannerHomePageState extends State<ScannerHomePage>
     );
   }
 
-  // ВКЛАДКА 2: АВТО-АНАЛИЗ (ТЕСТЫ ПОДСОСА, ФОРСУНОК, ЗАПУСКА И ГРМ)
+  // ВКЛАДКА 2: АВТО-АНАЛИЗ
   Widget _buildTestsTab() {
     final isCold = _ect == null || _ect! < 75;
     return ListView(
@@ -1471,8 +1822,9 @@ class _ScannerHomePageState extends State<ScannerHomePage>
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  onPressed:
-                  (isCold || _isRunningLeakTest) ? null : _runAirLeakAutoTest,
+                  onPressed: (isCold || _isRunningLeakTest)
+                      ? null
+                      : _runAirLeakAutoTest,
                   icon: const Icon(Icons.play_arrow_rounded),
                   label: Text(_isRunningLeakTest
                       ? 'Идет замер...'
@@ -1524,7 +1876,7 @@ class _ScannerHomePageState extends State<ScannerHomePage>
               ),
               const SizedBox(height: 10),
               Text(
-                'Сверяет адекватность ДТОЖ и ДТВ до старта, фиксирует минимальную просадку АКБ при работе стартера и перелив форсунок после пуска.',
+                'Сверяет ДТОЖ и ДТВ до старта (${_weatherTemp != null ? "погода по API: ${_weatherTemp!.toStringAsFixed(1)}°C, при расхождении перепроверьте уличным термометром" : "сверьте с уличным термометром"}), фиксирует просадку АКБ при стартере и перелив форсунок.',
                 style: TextStyle(fontSize: 13, color: _text2),
               ),
               const SizedBox(height: 14),
@@ -1580,7 +1932,8 @@ class _ScannerHomePageState extends State<ScannerHomePage>
               ),
               OutlinedButton.icon(
                 icon: const Icon(Icons.copy_rounded, size: 16),
-                label: const Text('Экспорт CSV', style: TextStyle(fontSize: 12)),
+                label:
+                const Text('Экспорт CSV', style: TextStyle(fontSize: 12)),
                 onPressed: _exportCsvToClipboard,
               ),
               IconButton(
@@ -1606,7 +1959,8 @@ class _ScannerHomePageState extends State<ScannerHomePage>
             ),
           )
               : ListView.builder(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+            padding:
+            const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
             itemCount: _nuanceLog.length,
             itemBuilder: (ctx, i) {
               final e = _nuanceLog[i];
@@ -1788,8 +2142,8 @@ class _ScannerHomePageState extends State<ScannerHomePage>
                   decoration: BoxDecoration(
                       color: _successSoft,
                       borderRadius: BorderRadius.circular(12)),
-                  child:
-                  Icon(Icons.check_circle_rounded, color: _success, size: 20),
+                  child: Icon(Icons.check_circle_rounded,
+                      color: _success, size: 20),
                 ),
                 const SizedBox(width: 14),
                 Expanded(
