@@ -2523,7 +2523,7 @@ class _ScannerHomePageState extends State<ScannerHomePage>
 
         // Карточка 3: Mode $06 ДК1, ДК2 и Катализатор
         _testCard(
-          icon: Icons.Analytics_outlined,
+          icon: Icons.analytics_outlined,
           iconColor: _success,
           iconBg: _successSoft,
           title: '3. Mode \$06: Ресурс ДК1, ДК2 и Катализатора',
