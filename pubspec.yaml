@@ -1,0 +1,23 @@
+name: lada_vesta_scanner
+description: "VestaScan M86 Pro Diagnostic Tool"
+publish_to: 'none'
+version: 1.1.0+2
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_bluetooth_classic_serial: ^1.0.9
+  permission_handler: ^11.3.1
+  fl_chart: ^0.69.0
+  http: ^1.2.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
