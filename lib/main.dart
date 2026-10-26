@@ -8,7 +8,7 @@ import 'package:flutter_bluetooth_classic_serial/flutter_bluetooth_classic.dart'
 import 'package:url_launcher/url_launcher.dart';
 
 // ===== КОНФИГУРАЦИЯ ВЕРСИИ И OTA (GITHUB RELEASES) =====
-const String kAppVersion = '1.1.4';
+const String kAppVersion = '1.1.7';
 const String kGithubRepo = 'MrValenOK/lada_vesta_scanner';
 const String kDirectApkFallbackUrl =
     'https://github.com/$kGithubRepo/releases/latest/download/app-debug.apk';
