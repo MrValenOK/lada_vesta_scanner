@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bluetooth_classic_serial/flutter_bluetooth_classic.dart';
@@ -525,6 +524,7 @@ final StringBuffer _rxBuffer = StringBuffer();
 StreamSubscription? _connSub;
 StreamSubscription? _dataSub;
 
+// ignore: unused_field
 int? _rpm, _ect, _iat, _map, _speedKmh;
 String _mapSourceTag = '010B';
 double? _engineLoadPct;
@@ -535,7 +535,9 @@ double? _o2AdcVolt, _o2AdcVolt2;
 DateTime? _lastO2SampleAt;
 
 String _rawLast2101 = 'не опрашивался';
+// ignore: unused_field
 String _rawLast2102 = 'не опрашивался';
+// ignore: unused_field
 String _rawLast010B = 'не опрашивался';
 
 final List<double> _o2S1History = [];
@@ -588,7 +590,9 @@ double? _calcCyclicAir;
 double? _calcMassAirFlowKgH;
 double? _calcFuelRateLh;
 
+// ignore: unused_field
 bool? _tid08Dk1Passed;
+// ignore: unused_field
 bool? _tid07Dk2Passed;
 
 bool _isTrackingPulleyLearn = false;
@@ -1368,30 +1372,36 @@ final r1081 = await _sendObdCommand('1081', timeoutMs: 900);
 final r1003 = await _sendObdCommand('1003', timeoutMs: 900);
 sb.writeln('1081 (KWP): $r1081 | 1003 (UDS): $r1003');
 
-// C5: TesterPresent перед каждым запросом — иначе сессия протухает
-for (final cmd in [
-'0904',
-'0100',
-'010B',
-'0104',
-'012E',
-'2101',
-'2102',
-'2103',
-]) {
-await _sendObdCommand(_isUdsM86 ? '3E00' : '3E',
-timeoutMs: 400, postDelayMs: 30);
-final r =
-await _sendObdCommand(cmd, timeoutMs: 1600, postDelayMs: 150);
-// C5: не парсим в state — только в дамп
-sb.writeln('$cmd => ${r.replaceAll('\n', ' | ')}');
-}
-
-// C5: обновляем _isUdsM86 по факту
+// Определяем протокол
 final kwpOk = r1081.contains('5081');
 final udsOk = r1003.contains('5003');
 if (!kwpOk && udsOk) _isUdsM86 = true;
 if (kwpOk && !udsOk) _isUdsM86 = false;
+
+sb.writeln('=> Протокол: ${_isUdsM86 ? "UDS" : "KWP-CAN"}');
+
+// Формируем список команд в зависимости от протокола
+final List<String> cmds = ['0904', '0100', '010B', '0104', '012E'];
+
+if (_isUdsM86) {
+// Для UDS используем команды 22 XX XX
+cmds.addAll([
+'222001', '222002', '222003', // Часто используются для ЭБУ М86 UDS
+'220401', '220402', '220403', // Альтернативные идентификаторы
+'22F187', '22F188', '22F190'  // Паспортные данные (железо, софт, VIN)
+]);
+} else {
+// Для KWP используем 21 XX
+cmds.addAll(['2101', '2102', '2103']);
+}
+
+for (final cmd in cmds) {
+await _sendObdCommand(_isUdsM86 ? '3E00' : '3E',
+timeoutMs: 400, postDelayMs: 30);
+final r =
+await _sendObdCommand(cmd, timeoutMs: 1600, postDelayMs: 150);
+sb.writeln('$cmd => ${r.replaceAll('\n', ' | ')}');
+}
 
 final dumpStr = sb.toString().trim();
 await Clipboard.setData(ClipboardData(text: dumpStr));
@@ -2022,14 +2032,16 @@ if (!_isPolling) break;
 _parseSpeed(await _sendObdCommand('010D'));
 if (!_isPolling) break;
 
-final r2101 = await _sendObdCommand('2101', timeoutMs: 1600);
-_rawLast2101 = r2101.replaceAll('\n', ' ');
-_parseM86ExtendedBlock(r2101);
+final cmdBlock1 = _isUdsM86 ? '222001' : '2101';
+final rBlock1 = await _sendObdCommand(cmdBlock1, timeoutMs: 1600);
+_rawLast2101 = rBlock1.replaceAll('\n', ' ');
+_parseM86ExtendedBlock(rBlock1, isUds: _isUdsM86);
 if (!_isPolling) break;
 
-final r2102 = await _sendObdCommand('2102', timeoutMs: 1500);
-_rawLast2102 = r2102.replaceAll('\n', ' ');
-_parseM86AdcBlock(r2102);
+final cmdBlock2 = _isUdsM86 ? '222002' : '2102';
+final rBlock2 = await _sendObdCommand(cmdBlock2, timeoutMs: 1500);
+_rawLast2102 = rBlock2.replaceAll('\n', ' ');
+_parseM86AdcBlock(rBlock2, isUds: _isUdsM86);
 
 if (!_mode06NotSupported &&
 _misfireCyl == null &&
@@ -2297,8 +2309,13 @@ if (b != null && b.isNotEmpty) _evapPurge = b[0] * 100.0 / 255.0;
 }
 
 // Заводской блок 21 01 — не перезаписывает стандартные PID
-void _parseM86ExtendedBlock(String r) {
-final b = ObdParser.extractBytes(r, '6101');
+void _parseM86ExtendedBlock(String r, {bool isUds = false}) {
+List<int>? b;
+if (isUds) {
+b = ObdParser.extractBytes(r, '622001') ?? ObdParser.extractBytes(r, '620401');
+} else {
+b = ObdParser.extractBytes(r, '6101');
+}
 if (b == null || b.length < 10) return;
 
 if (_map == null && b.length > 8 && b[8] >= 18 && b[8] <= 115) {
@@ -2362,8 +2379,13 @@ _updateDerivedEstimates();
 }
 
 // Заводской блок 21 02 — АЦП каналы
-void _parseM86AdcBlock(String r) {
-final b = ObdParser.extractBytes(r, '6102');
+void _parseM86AdcBlock(String r, {bool isUds = false}) {
+List<int>? b;
+if (isUds) {
+b = ObdParser.extractBytes(r, '622002') ?? ObdParser.extractBytes(r, '620402');
+} else {
+b = ObdParser.extractBytes(r, '6102');
+}
 if (b == null || b.length < 10) return;
 
 _mapAdcVolt = b[2] * 5.0 / 255.0;
@@ -2736,8 +2758,10 @@ await Future.delayed(const Duration(milliseconds: 250));
 }
 
 if (revStft.length < 3) {
-if (mounted) setState(() => _leakTestStatus =
-'⚠️ Не удалось набрать точки >2000 об/мин. Повторите, плавно нажав на газ.');
+if (mounted) {
+  setState(() => _leakTestStatus =
+  '⚠️ Не удалось набрать точки >2000 об/мин. Повторите, плавно нажав на газ.');
+}
 return;
 }
 
@@ -3075,12 +3099,14 @@ await _runExclusiveDiagnostic(() async {
 try {
 await _openM86DiagSession();
 
-final r2101 = await _sendObdCommand('2101', timeoutMs: 1600);
-final r2102 = await _sendObdCommand('2102', timeoutMs: 1600);
+final cmdBlock1 = _isUdsM86 ? '222001' : '2101';
+final r2101 = await _sendObdCommand(cmdBlock1, timeoutMs: 1600);
+final cmdBlock2 = _isUdsM86 ? '222002' : '2102';
+final r2102 = await _sendObdCommand(cmdBlock2, timeoutMs: 1600);
 _rawLast2101 = r2101.replaceAll('\n', ' ');
 _rawLast2102 = r2102.replaceAll('\n', ' ');
-_parseM86ExtendedBlock(r2101);
-_parseM86AdcBlock(r2102);
+_parseM86ExtendedBlock(r2101, isUds: _isUdsM86);
+_parseM86AdcBlock(r2102, isUds: _isUdsM86);
 
 if (_misfireCyl == null && !_mode06NotSupported) {
 await _pollMode06MisfiresQuick();
@@ -3211,10 +3237,11 @@ _clutchSwitchPressed = null;
 _brakeSwitch1Pressed = null;
 _brakeSwitch2Pressed = null;
 
-final r2101 = await _sendObdCommand('2101',
+final cmdBlock1 = _isUdsM86 ? '222001' : '2101';
+final r2101 = await _sendObdCommand(cmdBlock1,
 timeoutMs: 1100, postDelayMs: 150);
 _rawLast2101 = r2101.replaceAll('\n', ' ');
-_parseM86ExtendedBlock(r2101);
+_parseM86ExtendedBlock(r2101, isUds: _isUdsM86);
 
 if (_clutchSwitchPressed != null) {
 framesReceived++;
@@ -3716,7 +3743,7 @@ Text(
 // Фикс: не печатаем «при 0 об/мин»
 _minVoltRpm != null && _minVoltRpm! > 0
 ? '$timeStr (при $_minVoltRpm об/мин)'
-: '$timeStr',
+: timeStr,
 style: TextStyle(
 fontSize: 12,
 fontWeight: FontWeight.w700,
@@ -5882,7 +5909,6 @@ color: _text3),
         statusBg = _accentSoft;
         break;
       case TestStatus.pending:
-      default:
         statusColor = _text1;
         statusBg = _surface2;
         break;
