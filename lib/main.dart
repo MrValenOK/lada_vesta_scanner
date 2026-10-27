@@ -20,6 +20,8 @@ class VestaScanApp extends StatelessWidget {
       title: 'VestaScan Pro',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme, // Для проверки темной темы поменяй на darkTheme
+      darkTheme: AppTheme.darkTheme,
+      themeMode: ThemeMode.system,
       home: const MainScreen(),
     );
   }

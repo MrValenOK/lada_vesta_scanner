@@ -2,8 +2,8 @@ import 'ecu_parameter.dart';
 
 class EcuRequestBlock {
   final String name;       // Название пакета (например, "Основные параметры")
-  final String kwpCommand; // Команда для старых блоков (например, "2101")
-  final String udsCommand; // Команда для новых блоков UDS (например, "220001" или "222001")
+  final String kwpCommand; // Команда для KWP2000 (например, "2101")
+  final String udsCommand; // Команда для UDS (например, "222001")
   final List<EcuParameter> parameters;
 
   EcuRequestBlock({

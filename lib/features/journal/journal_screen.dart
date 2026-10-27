@@ -3,20 +3,18 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/obd_provider.dart';
 import '../../services/ai_prompt_builder.dart';
-import '../../services/trip_calculator.dart';
 
 class JournalScreen extends ConsumerWidget {
-  final TripCalculator tripCalculator;
-
-  const JournalScreen({super.key, required this.tripCalculator});
+  const JournalScreen({super.key});
 
   void _generateAndCopyPrompt(BuildContext context, WidgetRef ref) {
     final state = ref.read(obdProvider);
+    final notifier = ref.read(obdProvider.notifier);
     
     final prompt = AiPromptBuilder.generateSnapshot(
       liveData: state.liveData,
-      tripDistance: tripCalculator.totalDistanceKm,
-      fuelConsumed: tripCalculator.totalFuelLiters,
+      tripDistance: notifier.tripCalculator.totalDistanceKm,
+      fuelConsumed: notifier.tripCalculator.totalFuelLiters,
     );
 
     // Копируем в буфер обмена

@@ -1,7 +1,7 @@
 name: lada_vesta_scanner
 description: VestaScan Pro - Advanced Lada Diagnostic Tool
 publish_to: 'none'
-version: 2.0.0+20
+version: 2.1.0+1
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -15,7 +15,6 @@ dependencies:
   url_launcher: ^6.2.5
   shared_preferences: ^2.2.2
   path_provider: ^2.1.2
-  flutter_markdown: ^0.7.1
 
 dev_dependencies:
   flutter_test:

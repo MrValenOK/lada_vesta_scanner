@@ -3,15 +3,15 @@ import 'dart:math' as math;
 class EcuParameter {
   final String id;
   final String name;
-  final int byteOffset; // Смещение байта в ответе ЭБУ
-  final int width;      // Количество байт (обычно 1 или 2)
+  final int byteOffset;
+  final int width;
   final double multiplier;
   final double divisor;
   final double offset;
-  final int decimals;   // Количество знаков после запятой
-  final bool signedComplement; // Использовать ли дополнительный код (Two's complement) для отрицательных чисел
-  final int bitIndex;   // Если -1, то это число. Если >= 0, то это битовый флаг (0 или 1)
-  final String unit;    // Единица измерения (например, "°C" или "%")
+  final int decimals;
+  final bool signedComplement;
+  final int bitIndex; // Если -1, то это число. Если >= 0, то битовый флаг (0 или 1)
+  final String unit;
 
   EcuParameter({
     required this.id,
@@ -45,7 +45,7 @@ class EcuParameter {
 
   /// Метод декодирования сырых байт в готовое значение
   double? decode(List<int> payload) {
-    // Проверка выхода за границы массива
+    // Защита от выхода за пределы массива
     if (byteOffset < 0 || byteOffset + width > payload.length) return null;
 
     int raw = 0;
@@ -67,12 +67,16 @@ class EcuParameter {
       }
     }
 
-    // Применяем формулу: (raw * multiplier / divisor) + offset
-    double v = raw * multiplier / divisor + offset;
+    // Применяем формулу
+    double v = (raw * multiplier / divisor) + offset;
     
     // Округляем до нужного количества знаков
-    final factor = math.pow(10, decimals);
-    v = (v * factor).roundToDouble() / factor;
+    if (decimals > 0) {
+      final factor = math.pow(10, decimals);
+      v = (v * factor).roundToDouble() / factor;
+    } else {
+      v = v.roundToDouble();
+    }
     
     // Избегаем "-0.0"
     return v == 0 ? 0.0 : v;

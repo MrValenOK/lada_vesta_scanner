@@ -2,20 +2,19 @@ import 'dart:collection';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/obd_provider.dart';
-import '../../services/trip_calculator.dart';
 import 'widgets/trip_panel.dart';
 import 'widgets/oscilloscope.dart';
 
 class DashboardScreen extends ConsumerStatefulWidget {
-  final TripCalculator tripCalculator;
-
-  const DashboardScreen({super.key, required this.tripCalculator});
+  const DashboardScreen({super.key});
 
   @override
   ConsumerState<DashboardScreen> createState() => _DashboardScreenState();
 }
 
 class _DashboardScreenState extends ConsumerState<DashboardScreen> {
+  final String _selectedAddress = '00:11:22:33:44:55'; // Моковый MAC адрес
+
   @override
   Widget build(BuildContext context) {
     final obdState = ref.watch(obdProvider);
@@ -46,10 +45,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               TripPanel(
-                calculator: widget.tripCalculator,
+                calculator: obdNotifier.tripCalculator,
                 onReset: () {
                   setState(() {
-                    widget.tripCalculator.reset();
+                    obdNotifier.tripCalculator.reset();
                   });
                 },
               ),
@@ -99,7 +98,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           if (obdState.isPolling) {
             obdNotifier.stopPolling();
           } else {
-            obdNotifier.connect('00:00:00:00:00:00').then((success) {
+            obdNotifier.connect(_selectedAddress).then((success) {
               if (success) obdNotifier.startPolling();
             });
           }

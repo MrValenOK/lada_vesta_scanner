@@ -3,84 +3,24 @@
   "name": "Итэлма М86 (UDS)",
   "blocks": [
     {
-      "name": "Основной пакет параметров",
+      "name": "Основной пакет",
       "kwpCommand": "2101",
-      "udsCommand": "220001",
+      "udsCommand": "222001",
       "parameters": [
-        {
-          "id": "rpm",
-          "name": "Обороты двигателя",
-          "byteOffset": 8,
-          "width": 2,
-          "divisor": 4.0,
-          "unit": "об/мин"
-        },
-        {
-          "id": "ect",
-          "name": "Температура ОЖ",
-          "byteOffset": 3,
-          "width": 1,
-          "offset": -40.0,
-          "signedComplement": true,
-          "unit": "°C"
-        },
-        {
-          "id": "tps",
-          "name": "Дроссельная заслонка",
-          "byteOffset": 11,
-          "width": 1,
-          "multiplier": 100.0,
-          "divisor": 255.0,
-          "decimals": 1,
-          "unit": "%"
-        },
-        {
-          "id": "stft",
-          "name": "Текущая коррекция (STFT)",
-          "byteOffset": 15,
-          "width": 1,
-          "multiplier": 100.0,
-          "divisor": 128.0,
-          "offset": -100.0,
-          "decimals": 1,
-          "signedComplement": true,
-          "unit": "%"
-        },
-        {
-          "id": "ltft",
-          "name": "Обученная коррекция (LTFT)",
-          "byteOffset": 16,
-          "width": 1,
-          "multiplier": 100.0,
-          "divisor": 128.0,
-          "offset": -100.0,
-          "decimals": 1,
-          "signedComplement": true,
-          "unit": "%"
-        }
+        { "id": "rpm", "name": "Обороты", "byteOffset": 8, "width": 2, "divisor": 4.0, "unit": "об/мин" },
+        { "id": "ect", "name": "Температура ОЖ", "byteOffset": 3, "width": 1, "offset": -40.0, "unit": "°C" },
+        { "id": "tps", "name": "Дроссель", "byteOffset": 11, "width": 1, "multiplier": 100.0, "divisor": 255.0, "decimals": 1, "unit": "%" },
+        { "id": "stft", "name": "STFT", "byteOffset": 15, "width": 1, "multiplier": 100.0, "divisor": 128.0, "offset": -100.0, "decimals": 1, "signedComplement": false, "unit": "%" },
+        { "id": "ltft", "name": "LTFT", "byteOffset": 16, "width": 1, "multiplier": 100.0, "divisor": 128.0, "offset": -100.0, "decimals": 1, "signedComplement": false, "unit": "%" }
       ]
     },
     {
-      "name": "Дополнительный пакет (АЦП и Флаги)",
+      "name": "Дополнительный пакет",
       "kwpCommand": "2102",
-      "udsCommand": "220002",
+      "udsCommand": "222002",
       "parameters": [
-        {
-          "id": "misfire_cyl1",
-          "name": "Пропуски Цил.1",
-          "byteOffset": 20,
-          "width": 1,
-          "unit": "шт"
-        },
-        {
-          "id": "udk_volt",
-          "name": "Напряжение УДК",
-          "byteOffset": 22,
-          "width": 2,
-          "divisor": 1000.0,
-          "decimals": 3,
-          "unit": "В"
-        }
+        { "id": "misfire_cyl1", "name": "Пропуски Цил.1", "byteOffset": 20, "width": 1, "unit": "шт" },
+        { "id": "udk_volt", "name": "Напряжение УДК", "byteOffset": 22, "width": 2, "divisor": 1000.0, "decimals": 3, "unit": "В" }
       ]
     }
   ]
