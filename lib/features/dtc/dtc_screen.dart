@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/obd_provider.dart';
-import '../../core/theme.dart';
 
 class DtcScreen extends ConsumerStatefulWidget {
   const DtcScreen({super.key});
@@ -139,7 +138,7 @@ class _DtcScreenState extends ConsumerState<DtcScreen> {
                           itemBuilder: (context, index) {
                             final dtc = _dtcs[index];
                             final isStored = dtc['status']!.contains('Сохраненная');
-                            final statusColor = isStored ? AppColors.warning : Theme.of(context).colorScheme.error;
+                            final statusColor = isStored ? Colors.orange : Theme.of(context).colorScheme.error;
                             
                             return Card(
                               margin: const EdgeInsets.only(bottom: 12),

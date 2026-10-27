@@ -120,10 +120,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(12),
         border: Border(
+          left: BorderSide(color: isLive ? Colors.green : Colors.grey, width: 4),
           top: BorderSide(color: Theme.of(context).dividerColor),
           right: BorderSide(color: Theme.of(context).dividerColor),
           bottom: BorderSide(color: Theme.of(context).dividerColor),
-          left: BorderSide(color: isLive ? Colors.green : Colors.grey, width: 4),
         ),
       ),
       child: Column(

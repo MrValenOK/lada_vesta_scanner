@@ -2,14 +2,12 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/bluetooth_service.dart';
-// ignore: unused_import
-import '../services/obd_parser.dart';
 
 class ObdState {
   final bool isConnected;
   final bool isPolling;
   final Map<String, double> liveData;
-  final List<double> trace1; // Очередь для графика осциллографа
+  final List<double> trace1;
 
   ObdState({
     this.isConnected = false,
@@ -43,14 +41,11 @@ class ObdNotifier extends StateNotifier<ObdState> {
   final BluetoothService _btService;
   Timer? _pollTimer;
   bool _isPollCycleBusy = false;
-  
-  // Имитация данных для теста анимации графика (пока нет реальной машины)
-  double _demoSineWave = 0.0; 
+  double _demoSineWave = 0.0;
 
   ObdNotifier(this._btService) : super(ObdState());
 
   Future<bool> connect(String macAddress) async {
-    // Временно всегда возвращаем true для тестов UI без машины
     state = state.copyWith(isConnected: true);
     return true;
   }
@@ -64,7 +59,7 @@ class ObdNotifier extends StateNotifier<ObdState> {
   void startPolling() {
     if (!state.isConnected || state.isPolling) return;
     state = state.copyWith(isPolling: true);
-    
+
     _pollTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) async {
       await _pollCycle();
     });
@@ -81,20 +76,19 @@ class ObdNotifier extends StateNotifier<ObdState> {
     _isPollCycleBusy = true;
 
     try {
-      // Имитируем получение данных (синусоида для теста осциллографа)
       _demoSineWave += 0.2;
-      double simulatedValue = (math.sin(_demoSineWave) * 400) + 800; // Обороты от 400 до 1200
+      final double simulatedValue = (math.sin(_demoSineWave) * 400) + 800;
 
       final updatedData = Map<String, double>.from(state.liveData);
       updatedData['rpm'] = simulatedValue;
+      updatedData['ect'] = 88.0;
 
-      // Обновляем историю для графика (храним 100 последних точек)
       final updatedTrace = List<double>.from(state.trace1);
       updatedTrace.add(simulatedValue);
       if (updatedTrace.length > 100) {
         updatedTrace.removeAt(0);
       }
-      
+
       state = state.copyWith(liveData: updatedData, trace1: updatedTrace);
     } finally {
       _isPollCycleBusy = false;
