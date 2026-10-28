@@ -3,13 +3,12 @@ import 'dart:io';
 
 class OtaService {
   // Константы твоего репозитория
-  static const String currentVersion = '2.2.0';
+  static const String currentVersion = '2.3.0';
   static const String githubRepo = 'MrValenOK/lada_vesta_scanner';
 
-  // Метод проверки обновлений
   static Future<Map<String, dynamic>?> checkForUpdates() async {
     final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 8);
+      ..connectionTimeout = const Duration(seconds: 5); // Уменьшили с 8
 
     try {
       final req = await client.getUrl(
@@ -48,11 +47,21 @@ class OtaService {
         };
       }
     } catch (e) {
-      // Игнорируем ошибки сети
+      // Не молчим — возвращаем специальный маркер, что API недоступен,
+      // но даем возможность открыть страницу релизов напрямую.
+      return {
+        'hasUpdate': false,
+        'error': 'API_UNREACHABLE',
+        'fallbackUrl': 'https://github.com/$githubRepo/releases/latest',
+      };
     } finally {
       client.close(force: true);
     }
-    return null;
+    return {
+      'hasUpdate': false,
+      'error': 'API_UNREACHABLE',
+      'fallbackUrl': 'https://github.com/$githubRepo/releases/latest',
+    };
   }
 
   // Сравнение версий (например, v2.2.0 > v2.1.0)

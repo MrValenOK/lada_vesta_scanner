@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/obd_provider.dart';
 import '../../core/theme.dart';
@@ -35,6 +36,36 @@ class _TestsScreenState extends ConsumerState<TestsScreen> {
     }
   }
 
+  void _runAbsDashboardSniffer(BuildContext context, WidgetRef ref) async {
+    final obdNotifier = ref.read(obdProvider.notifier);
+    
+    showDialog(context: context, barrierDismissible: false, builder: (ctx) => const Center(child: CircularProgressIndicator()));
+    
+    // Сначала читаем ABS (740/748), потом Приборку (743/74B)
+    final absResult = await obdNotifier.runModuleSniffer('ABS', '740', '748');
+    final dashResult = await obdNotifier.runModuleSniffer('Приборка', '743', '74B');
+    
+    if (context.mounted) Navigator.pop(context); // Закрываем лоадер
+    
+    final fullResult = '$absResult\n\n$dashResult';
+    
+    // Копируем в буфер обмена
+    await Clipboard.setData(ClipboardData(text: fullResult));
+    
+    if (context.mounted) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Результат сниффера'),
+          content: SingleChildScrollView(child: Text(fullResult, style: const TextStyle(fontFamily: 'JetBrains Mono', fontSize: 12))),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Закрыть'))
+          ],
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -42,6 +73,17 @@ class _TestsScreenState extends ConsumerState<TestsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.darkSurface2,
+              foregroundColor: AppColors.darkAccent,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+            ),
+            onPressed: () => _runAbsDashboardSniffer(context, ref),
+            icon: const Icon(Icons.radar),
+            label: const Text('Сканировать блоки ABS и Приборки'),
+          ),
+          const SizedBox(height: 16),
           _buildTestCard(
             title: 'Адаптация нуля ДЗ',
             subtitle: '30 секунд покоя + 10 сек главное реле',

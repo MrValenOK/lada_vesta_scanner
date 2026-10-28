@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
 
     <!-- Разрешения для старых Android (до 11 версии) -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />

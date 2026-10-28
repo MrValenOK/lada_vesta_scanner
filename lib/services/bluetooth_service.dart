@@ -71,4 +71,15 @@ class BluetoothService {
       lock.complete();
     }
   }
+
+  Future<void> switchModule(String txId, String rxId) async {
+    // Задаем адрес, кому шлем (например, 740 для ABS)
+    await sendCommand('ATSH$txId');
+    // Задаем адрес, от кого ждем ответ (обычно TX + 8, т.е. 748)
+    await sendCommand('ATCRA$rxId');
+    // Настраиваем Flow Control для этого блока
+    await sendCommand('ATFCSH$txId');
+    // Открываем UDS-сессию для этого блока
+    await sendCommand('1003'); 
+  }
 }

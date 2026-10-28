@@ -14,15 +14,17 @@ import '../data/models/nuance_event.dart';
 class ObdState {
   final bool isConnected;
   final bool isPolling;
+  final String connectedDevice;   // ← НОВОЕ
   final Map<String, double> liveData;
-  final List<double> trace1;   // УДК
-  final List<double> trace2;   // ДДК
+  final List<double> trace1;
+  final List<double> trace2;
   final List<NuanceEvent> nuances;
   final Map<String, double> trimMedians;
 
   ObdState({
     this.isConnected = false,
     this.isPolling = false,
+    this.connectedDevice = '',
     this.liveData = const {},
     this.trace1 = const [],
     this.trace2 = const [],
@@ -33,6 +35,7 @@ class ObdState {
   ObdState copyWith({
     bool? isConnected,
     bool? isPolling,
+    String? connectedDevice,
     Map<String, double>? liveData,
     List<double>? trace1,
     List<double>? trace2,
@@ -42,6 +45,7 @@ class ObdState {
     return ObdState(
       isConnected: isConnected ?? this.isConnected,
       isPolling: isPolling ?? this.isPolling,
+      connectedDevice: connectedDevice ?? this.connectedDevice,
       liveData: liveData ?? this.liveData,
       trace1: trace1 ?? this.trace1,
       trace2: trace2 ?? this.trace2,
@@ -155,7 +159,7 @@ class ObdNotifier extends StateNotifier<ObdState> {
       _isUdsM86 = false;
     }
 
-    state = state.copyWith(isConnected: true);
+    state = state.copyWith(isConnected: true, connectedDevice: macAddress);
     return true;
   }
 
@@ -470,6 +474,46 @@ class ObdNotifier extends StateNotifier<ObdState> {
       }
     }
 
+    return sb.toString();
+  }
+
+  Future<String> runModuleSniffer(String moduleName, String txId, String rxId) async {
+    final sb = StringBuffer();
+    sb.writeln('=== СНИФФЕР БЛОКА: $moduleName (TX: $txId, RX: $rxId) ===');
+    
+    // Переключаемся на нужный блок
+    await _btService.switchModule(txId, rxId);
+    
+    // Список популярных DID, где может лежать пробег, топливо или VIN
+    final List<String> testDids = [
+      '22F190', // VIN (стандартный UDS)
+      '22F187', // Part Number
+      '22F18C', // Серийный номер
+      '22DD01', // Часто пробег у Renault/ВАЗ
+      '22DD02',
+      '222001', // Общие данные
+      '222002',
+      '222003',
+      '220401',
+      '220402'
+    ];
+
+    for (final did in testDids) {
+      final resp = await _btService.sendCommand(did, timeoutMs: 1000);
+      final cleanResp = resp.replaceAll('\n', ' | ');
+      
+      // Если ответ не содержит ошибку "7F" (отказ), значит мы нашли данные!
+      if (!resp.contains('7F') && resp.isNotEmpty) {
+        sb.writeln('✅ $did => $cleanResp');
+      } else {
+        sb.writeln('❌ $did => Отказ/Нет данных');
+      }
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+    
+    // Возвращаем ELM327 обратно на двигатель
+    await _btService.switchModule('7E0', '7E8');
+    
     return sb.toString();
   }
 

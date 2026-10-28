@@ -16,7 +16,6 @@ class DashboardScreen extends ConsumerStatefulWidget {
 
 class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   Future<void> _checkOta() async {
-    // Показываем загрузку
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Проверка обновлений на GitHub...'), duration: Duration(seconds: 2)),
     );
@@ -25,15 +24,57 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
     if (!mounted) return;
 
-    if (result == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Не удалось проверить обновления (нет сети)'), backgroundColor: AppColors.error),
+    // СЛУЧАЙ 1: API недоступен (нет интернета, блокировка провайдера, или нет разрешения)
+    if (result == null || result['error'] == 'API_UNREACHABLE') {
+      showModalBottomSheet(
+        context: context,
+        backgroundColor: AppColors.darkSurface,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+        builder: (ctx) => Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.wifi_off_rounded, color: AppColors.warning, size: 28),
+                  SizedBox(width: 12),
+                  Expanded(child: Text('API GitHub недоступен', style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold))),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Не удалось проверить обновления автоматически.\n\n'
+                'Возможные причины: нет интернета, мобильный оператор блокирует api.github.com (частая проблема в РФ), или отключён VPN.',
+                style: TextStyle(color: Colors.grey, fontSize: 13, height: 1.4),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.darkAccent,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    final url = result?['fallbackUrl'] ?? 'https://github.com/MrValenOK/lada_vesta_scanner/releases/latest';
+                    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+                  },
+                  icon: const Icon(Icons.open_in_new, color: Colors.black),
+                  label: const Text('Открыть GitHub в браузере', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ),
+        ),
       );
       return;
     }
 
+    // СЛУЧАЙ 2: Есть обновление
     if (result['hasUpdate'] == true) {
-      // Есть новая версия — показываем шторку
       showModalBottomSheet(
         context: context,
         backgroundColor: AppColors.darkSurface,
@@ -57,10 +98,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.success,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, padding: const EdgeInsets.symmetric(vertical: 14)),
                   onPressed: () async {
                     Navigator.pop(ctx);
                     final uri = Uri.parse(result['apkUrl']);
@@ -79,9 +117,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         ),
       );
     } else {
-      // Обновлений нет
+      // СЛУЧАЙ 3: Уже последняя версия
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('У вас установлена последняя версия (${OtaService.currentVersion})'), backgroundColor: AppColors.success),
+        SnackBar(content: Text('У вас последняя версия (${OtaService.currentVersion})'), backgroundColor: AppColors.success),
       );
     }
   }
@@ -143,6 +181,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 90),
           children: [
+            _buildConnectionCard(),
+            const SizedBox(height: 12),
             _buildTripComputerCard(tripCalc, obdNotifier),
             
             const SizedBox(height: 16),
@@ -177,55 +217,129 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: obdState.isPolling ? AppColors.error : AppColors.darkAccent,
-        onPressed: () async {
-          if (obdState.isPolling) {
-            obdNotifier.stopPolling();
-          } else {
-            final devices = await obdNotifier.getBluetoothDevices();
-            if (devices.isEmpty) {
-              if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Нет спаренных устройств')));
-              return;
-            }
-            if (!mounted) return;
-            showDialog(
-              context: context,
-              builder: (ctx) => AlertDialog(
-                backgroundColor: AppColors.darkSurface,
-                title: const Text('Выберите ELM327', style: TextStyle(color: Colors.white)),
-                content: SizedBox(
-                  width: double.maxFinite,
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: devices.length,
-                    itemBuilder: (c, i) {
-                      final d = devices[i];
-                      return ListTile(
-                        title: Text(d['name'] ?? 'Unknown', style: const TextStyle(color: Colors.white)),
-                        subtitle: Text(d['address'] ?? '', style: const TextStyle(color: Colors.grey, fontSize: 11)),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          obdNotifier.connect(d['address']!).then((s) {
-                            if (s) obdNotifier.startPolling();
-                          });
-                        },
-                      );
-                    },
-                  ),
-                ),
-              ),
-            );
-          }
-        },
-        child: Icon(obdState.isPolling ? Icons.stop : Icons.play_arrow, color: Colors.black, size: 32),
-      ),
     );
   }
 
   String _statusRpm(int? rpm) => (rpm != null && (rpm < 780 || rpm > 900)) ? 'warn' : 'good';
   String _statusEct(int? ect) => (ect != null && ect > 103) ? 'err' : (ect != null && ect < 87 ? 'warn' : 'good');
   String _statusTrim(double? val) => (val != null && val.abs() > 15) ? 'err' : (val != null && val.abs() > 8 ? 'warn' : 'good');
+
+  Widget _buildConnectionCard() {
+    final obdState = ref.watch(obdProvider);
+    final obdNotifier = ref.read(obdProvider.notifier);
+    final isConnected = obdState.isConnected;
+    final isPolling = obdState.isPolling;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.darkSurface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: isPolling ? AppColors.success : AppColors.darkBorder, width: isPolling ? 1.5 : 1.0),
+      ),
+      child: Row(
+        children: [
+          // Иконка Bluetooth с индикатором
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: isPolling ? AppColors.successSoft : AppColors.darkAccentSoft,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.bluetooth_rounded,
+              color: isPolling ? AppColors.success : AppColors.darkAccent,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 12),
+          // Информация о статусе
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isPolling ? 'На связи' : (isConnected ? 'Подключен' : 'Выберите ELM327 адаптер'),
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: isPolling ? AppColors.success : Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  isPolling
+                      ? (obdState.connectedDevice.isNotEmpty ? obdState.connectedDevice : 'Опрос активен')
+                      : (isConnected ? 'Готов к опросу' : 'Нажмите Старт для подключения'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11.5, color: AppColors.darkText2),
+                ),
+              ],
+            ),
+          ),
+          // Кнопка Старт/Стоп
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: isPolling ? AppColors.errorSoft : AppColors.darkAccentSoft,
+              foregroundColor: isPolling ? AppColors.error : AppColors.darkAccent,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () async {
+              if (isPolling) {
+                obdNotifier.stopPolling();
+              } else {
+                final devices = await obdNotifier.getBluetoothDevices();
+                if (devices.isEmpty) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Нет спаренных Bluetooth-устройств. Сначала спарьте ELM327 в настройках телефона!'), backgroundColor: AppColors.warning),
+                    );
+                  }
+                  return;
+                }
+                if (!mounted) return;
+                showDialog(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    backgroundColor: AppColors.darkSurface,
+                    title: const Text('Выберите ELM327', style: TextStyle(color: Colors.white)),
+                    content: SizedBox(
+                      width: double.maxFinite,
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: devices.length,
+                        itemBuilder: (c, i) {
+                          final d = devices[i];
+                          return ListTile(
+                            title: Text(d['name'] ?? 'Unknown', style: const TextStyle(color: Colors.white)),
+                            subtitle: Text(d['address'] ?? '', style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                            onTap: () {
+                              Navigator.pop(ctx);
+                              obdNotifier.connect(d['address']!).then((s) {
+                                if (s) obdNotifier.startPolling();
+                              });
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                );
+              }
+            },
+            child: Text(
+              isPolling ? 'Стоп' : 'Старт',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _sectionTitle(String title, String hint) {
     return Padding(

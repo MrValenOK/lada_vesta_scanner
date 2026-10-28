@@ -2,7 +2,7 @@
 name: lada_vesta_scanner
 description: VestaScan Pro - Advanced Lada Diagnostic Tool
 publish_to: 'none'
-version: 2.1.0+1
+version: 2.2.0+1
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -372,7 +372,6 @@ class DashboardScreen extends ConsumerStatefulWidget {
 
 class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   Future<void> _checkOta() async {
-    // Показываем загрузку
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Проверка обновлений на GitHub...'), duration: Duration(seconds: 2)),
     );
@@ -381,15 +380,57 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
     if (!mounted) return;
 
-    if (result == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Не удалось проверить обновления (нет сети)'), backgroundColor: AppColors.error),
+    // СЛУЧАЙ 1: API недоступен (нет интернета, блокировка провайдера, или нет разрешения)
+    if (result == null || result['error'] == 'API_UNREACHABLE') {
+      showModalBottomSheet(
+        context: context,
+        backgroundColor: AppColors.darkSurface,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+        builder: (ctx) => Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.wifi_off_rounded, color: AppColors.warning, size: 28),
+                  SizedBox(width: 12),
+                  Expanded(child: Text('API GitHub недоступен', style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold))),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Не удалось проверить обновления автоматически.\n\n'
+                'Возможные причины: нет интернета, мобильный оператор блокирует api.github.com (частая проблема в РФ), или отключён VPN.',
+                style: TextStyle(color: Colors.grey, fontSize: 13, height: 1.4),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.darkAccent,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    final url = result?['fallbackUrl'] ?? 'https://github.com/MrValenOK/lada_vesta_scanner/releases/latest';
+                    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+                  },
+                  icon: const Icon(Icons.open_in_new, color: Colors.black),
+                  label: const Text('Открыть GitHub в браузере', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ),
+        ),
       );
       return;
     }
 
+    // СЛУЧАЙ 2: Есть обновление
     if (result['hasUpdate'] == true) {
-      // Есть новая версия — показываем шторку
       showModalBottomSheet(
         context: context,
         backgroundColor: AppColors.darkSurface,
@@ -413,10 +454,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.success,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                  ),
+                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.success, padding: const EdgeInsets.symmetric(vertical: 14)),
                   onPressed: () async {
                     Navigator.pop(ctx);
                     final uri = Uri.parse(result['apkUrl']);
@@ -435,9 +473,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         ),
       );
     } else {
-      // Обновлений нет
+      // СЛУЧАЙ 3: Уже последняя версия
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('У вас установлена последняя версия (${OtaService.currentVersion})'), backgroundColor: AppColors.success),
+        SnackBar(content: Text('У вас последняя версия (${OtaService.currentVersion})'), backgroundColor: AppColors.success),
       );
     }
   }
@@ -499,6 +537,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 90),
           children: [
+            _buildConnectionCard(),
+            const SizedBox(height: 12),
             _buildTripComputerCard(tripCalc, obdNotifier),
             
             const SizedBox(height: 16),
@@ -529,52 +569,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
             const SizedBox(height: 20),
             _sectionTitle('ОСЦИЛЛОГРАФ УДК/ДДК', '0–1.8 В'),
-            _buildOscilloscope(obdState.trace1),
+            _buildOscilloscope(obdState.trace1, obdState.trace2),
           ],
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        backgroundColor: obdState.isPolling ? AppColors.error : AppColors.darkAccent,
-        onPressed: () async {
-          if (obdState.isPolling) {
-            obdNotifier.stopPolling();
-          } else {
-            final devices = await obdNotifier.getBluetoothDevices();
-            if (devices.isEmpty) {
-              if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Нет спаренных устройств')));
-              return;
-            }
-            if (!mounted) return;
-            showDialog(
-              context: context,
-              builder: (ctx) => AlertDialog(
-                backgroundColor: AppColors.darkSurface,
-                title: const Text('Выберите ELM327', style: TextStyle(color: Colors.white)),
-                content: SizedBox(
-                  width: double.maxFinite,
-                  child: ListView.builder(
-                    shrinkWrap: true,
-                    itemCount: devices.length,
-                    itemBuilder: (c, i) {
-                      final d = devices[i];
-                      return ListTile(
-                        title: Text(d['name'] ?? 'Unknown', style: const TextStyle(color: Colors.white)),
-                        subtitle: Text(d['address'] ?? '', style: const TextStyle(color: Colors.grey, fontSize: 11)),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          obdNotifier.connect(d['address']!).then((s) {
-                            if (s) obdNotifier.startPolling();
-                          });
-                        },
-                      );
-                    },
-                  ),
-                ),
-              ),
-            );
-          }
-        },
-        child: Icon(obdState.isPolling ? Icons.stop : Icons.play_arrow, color: Colors.black, size: 32),
       ),
     );
   }
@@ -582,6 +579,123 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   String _statusRpm(int? rpm) => (rpm != null && (rpm < 780 || rpm > 900)) ? 'warn' : 'good';
   String _statusEct(int? ect) => (ect != null && ect > 103) ? 'err' : (ect != null && ect < 87 ? 'warn' : 'good');
   String _statusTrim(double? val) => (val != null && val.abs() > 15) ? 'err' : (val != null && val.abs() > 8 ? 'warn' : 'good');
+
+  Widget _buildConnectionCard() {
+    final obdState = ref.watch(obdProvider);
+    final obdNotifier = ref.read(obdProvider.notifier);
+    final isConnected = obdState.isConnected;
+    final isPolling = obdState.isPolling;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.darkSurface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: isPolling ? AppColors.success : AppColors.darkBorder, width: isPolling ? 1.5 : 1.0),
+      ),
+      child: Row(
+        children: [
+          // Иконка Bluetooth с индикатором
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: isPolling ? AppColors.successSoft : AppColors.darkAccentSoft,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.bluetooth_rounded,
+              color: isPolling ? AppColors.success : AppColors.darkAccent,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 12),
+          // Информация о статусе
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isPolling ? 'На связи' : (isConnected ? 'Подключен' : 'Выберите ELM327 адаптер'),
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: isPolling ? AppColors.success : Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  isPolling
+                      ? (obdState.connectedDevice.isNotEmpty ? obdState.connectedDevice : 'Опрос активен')
+                      : (isConnected ? 'Готов к опросу' : 'Нажмите Старт для подключения'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 11.5, color: AppColors.darkText2),
+                ),
+              ],
+            ),
+          ),
+          // Кнопка Старт/Стоп
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: isPolling ? AppColors.errorSoft : AppColors.darkAccentSoft,
+              foregroundColor: isPolling ? AppColors.error : AppColors.darkAccent,
+              elevation: 0,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () async {
+              if (isPolling) {
+                obdNotifier.stopPolling();
+              } else {
+                final devices = await obdNotifier.getBluetoothDevices();
+                if (devices.isEmpty) {
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Нет спаренных Bluetooth-устройств. Сначала спарьте ELM327 в настройках телефона!'), backgroundColor: AppColors.warning),
+                    );
+                  }
+                  return;
+                }
+                if (!mounted) return;
+                showDialog(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    backgroundColor: AppColors.darkSurface,
+                    title: const Text('Выберите ELM327', style: TextStyle(color: Colors.white)),
+                    content: SizedBox(
+                      width: double.maxFinite,
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: devices.length,
+                        itemBuilder: (c, i) {
+                          final d = devices[i];
+                          return ListTile(
+                            title: Text(d['name'] ?? 'Unknown', style: const TextStyle(color: Colors.white)),
+                            subtitle: Text(d['address'] ?? '', style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                            onTap: () {
+                              Navigator.pop(ctx);
+                              obdNotifier.connect(d['address']!).then((s) {
+                                if (s) obdNotifier.startPolling();
+                              });
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                );
+              }
+            },
+            child: Text(
+              isPolling ? 'Стоп' : 'Старт',
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _sectionTitle(String title, String hint) {
     return Padding(
@@ -730,15 +844,32 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     );
   }
 
-  Widget _buildOscilloscope(List<double> trace) {
+  Widget _buildOscilloscope(List<double> s1, List<double> s2) {
     return Container(
       height: 170,
-      decoration: BoxDecoration(color: AppColors.darkScopeBg, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.darkBorder)),
+      decoration: BoxDecoration(
+        color: AppColors.darkScopeBg,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.darkBorder),
+      ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
-        child: trace.isEmpty
-            ? const Center(child: Text('Ожидание данных...', style: TextStyle(color: AppColors.darkText3, fontSize: 12)))
-            : CustomPaint(painter: _ScopePainter(trace: trace), size: Size.infinite),
+        child: RepaintBoundary(
+          child: (s1.isEmpty && s2.isEmpty)
+              ? const Center(
+                  child: Text('Ожидание данных...',
+                      style: TextStyle(color: AppColors.darkText3, fontSize: 12)))
+              : CustomPaint(
+                  painter: _O2OscilloscopePainter(
+                    s1: s1,
+                    s2: s2,
+                    s1Color: AppColors.darkTrace1,
+                    s2Color: AppColors.darkTrace2,
+                    gridColor: AppColors.darkScopeGrid,
+                  ),
+                  size: Size.infinite,
+                ),
+        ),
       ),
     );
   }
@@ -770,9 +901,20 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   }
 }
 
-class _ScopePainter extends CustomPainter {
-  final List<double> trace;
-  _ScopePainter({required this.trace});
+class _O2OscilloscopePainter extends CustomPainter {
+  final List<double> s1;
+  final List<double> s2;
+  final Color s1Color;
+  final Color s2Color;
+  final Color gridColor;
+
+  _O2OscilloscopePainter({
+    required this.s1,
+    required this.s2,
+    required this.s1Color,
+    required this.s2Color,
+    required this.gridColor,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -794,19 +936,35 @@ class _ScopePainter extends CustomPainter {
       canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
     }
 
-    if (trace.length < 2) return;
-    final paint = Paint()..color = AppColors.darkTrace1..strokeWidth = 2..style = PaintingStyle.stroke;
-    final path = Path();
-    final stepX = size.width / 100;
+    void drawTrace(List<double> trace, Color color) {
+      if (trace.isEmpty) return;
+      final paint = Paint()
+        ..color = color
+        ..strokeWidth = 2.0
+        ..style = PaintingStyle.stroke
+        ..strokeJoin = StrokeJoin.round;
 
-    for (int i = 0; i < trace.length; i++) {
-      final x = i * stepX;
-      final y = height - ((trace[i] / maxScaleV).clamp(0.0, 1.0) * height);
-      if (i == 0) path.moveTo(x, y);
-      else path.lineTo(x, y);
+      final path = Path();
+      final stepX = size.width / 99;
+
+      for (int i = 0; i < trace.length; i++) {
+        final x = i * stepX;
+        final normalizedY = (trace[i] / maxScaleV).clamp(0.0, 1.0);
+        final y = height - (normalizedY * height);
+
+        if (i == 0) {
+          path.moveTo(x, y);
+        } else {
+          path.lineTo(x, y);
+        }
+      }
+      canvas.drawPath(path, paint);
     }
-    canvas.drawPath(path, paint);
+
+    drawTrace(s1, s1Color);
+    drawTrace(s2, s2Color);
   }
+
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
@@ -1670,7 +1828,7 @@ class _MainScreenState extends State<MainScreen> {
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
@@ -1683,16 +1841,20 @@ import '../data/models/nuance_event.dart';
 class ObdState {
   final bool isConnected;
   final bool isPolling;
+  final String connectedDevice;   // ← НОВОЕ
   final Map<String, double> liveData;
   final List<double> trace1;
+  final List<double> trace2;
   final List<NuanceEvent> nuances;
   final Map<String, double> trimMedians;
 
   ObdState({
     this.isConnected = false,
     this.isPolling = false,
+    this.connectedDevice = '',
     this.liveData = const {},
     this.trace1 = const [],
+    this.trace2 = const [],
     this.nuances = const [],
     this.trimMedians = const {},
   });
@@ -1700,16 +1862,20 @@ class ObdState {
   ObdState copyWith({
     bool? isConnected,
     bool? isPolling,
+    String? connectedDevice,
     Map<String, double>? liveData,
     List<double>? trace1,
+    List<double>? trace2,
     List<NuanceEvent>? nuances,
     Map<String, double>? trimMedians,
   }) {
     return ObdState(
       isConnected: isConnected ?? this.isConnected,
       isPolling: isPolling ?? this.isPolling,
+      connectedDevice: connectedDevice ?? this.connectedDevice,
       liveData: liveData ?? this.liveData,
       trace1: trace1 ?? this.trace1,
+      trace2: trace2 ?? this.trace2,
       nuances: nuances ?? this.nuances,
       trimMedians: trimMedians ?? this.trimMedians,
     );
@@ -1820,7 +1986,7 @@ class ObdNotifier extends StateNotifier<ObdState> {
       _isUdsM86 = false;
     }
 
-    state = state.copyWith(isConnected: true);
+    state = state.copyWith(isConnected: true, connectedDevice: macAddress);
     return true;
   }
 
@@ -1875,6 +2041,19 @@ class ObdNotifier extends StateNotifier<ObdState> {
         }
       }
 
+      // 2.5. Читаем УДК и ДДК (стандартные OBD-II PID)
+      final resO2 = await _btService.sendCommand('0114', timeoutMs: 800);
+      final bytesO2 = ObdParser.extractBytes(resO2, '4114');
+      if (bytesO2 != null && bytesO2.isNotEmpty) {
+        updatedData['udk_volt'] = bytesO2[0] / 200.0;
+      }
+
+      final resO2b = await _btService.sendCommand('0115', timeoutMs: 800);
+      final bytesO2b = ObdParser.extractBytes(resO2b, '4115');
+      if (bytesO2b != null && bytesO2b.isNotEmpty) {
+        updatedData['ddk_volt'] = bytesO2b[0] / 200.0;
+      }
+
       // 3. Читаем СКОРОСТЬ для БК (стандартный OBD2 PID 010D)
       final resSpeed = await _btService.sendCommand('010D', timeoutMs: 800);
       final bytesSpeed = ObdParser.extractBytes(resSpeed, '410D');
@@ -1886,7 +2065,7 @@ class ObdNotifier extends StateNotifier<ObdState> {
       tripCalculator.update(
         rpm: updatedData['rpm']?.toInt() ?? 0,
         speedKmh: updatedData['speed'] ?? 0.0,
-        airMassKgH: (updatedData['map'] ?? 35) * (updatedData['rpm'] ?? 840) * 0.00025,
+        airMassKgH: (updatedData['map'] ?? 35.0) * (updatedData['rpm'] ?? 840.0) * 0.00025,
         tpsPct: updatedData['tps'] ?? 0.0,
         isDfcoActive: false,
         stftPct: updatedData['stft'] ?? 0.0,
@@ -1919,14 +2098,31 @@ class ObdNotifier extends StateNotifier<ObdState> {
         _logNuance('overheat', 'Перегрев ОЖ', 'Температура ${updatedData['ect']!.toInt()}°C > 103°C', NuanceSeverity.critical);
       }
 
-      // Обновляем график
-      final updatedTrace = List<double>.from(state.trace1);
-      if (updatedData.containsKey('rpm')) {
-        updatedTrace.add(updatedData['rpm']!);
-        if (updatedTrace.length > 100) updatedTrace.removeAt(0);
+      // Логирование коррекций
+      if (updatedData['stft'] != null && updatedData['stft']!.abs() > 15) {
+        _logNuance('trim_high', 'Коррекция STFT > 15%', 'STFT: ${updatedData['stft']!.toStringAsFixed(1)}%', NuanceSeverity.warning);
+      }
+      
+      // Логирование просадки АКБ
+      if (updatedData['volt'] != null && updatedData['volt']! < 10.5 && updatedData['volt']! > 5.0) {
+        _logNuance('volt_low', 'Просадка АКБ', 'Напряжение: ${updatedData['volt']!.toStringAsFixed(2)} В', NuanceSeverity.critical);
       }
 
-      state = state.copyWith(liveData: updatedData, trace1: updatedTrace);
+      // Обновляем график УДК
+      final updatedTrace1 = List<double>.from(state.trace1);
+      if (updatedData.containsKey('udk_volt')) {
+        updatedTrace1.add(updatedData['udk_volt']!);
+        if (updatedTrace1.length > 100) updatedTrace1.removeAt(0);
+      }
+
+      // Обновляем график ДДК
+      final updatedTrace2 = List<double>.from(state.trace2);
+      if (updatedData.containsKey('ddk_volt')) {
+        updatedTrace2.add(updatedData['ddk_volt']!);
+        if (updatedTrace2.length > 100) updatedTrace2.removeAt(0);
+      }
+
+      state = state.copyWith(liveData: updatedData, trace1: updatedTrace1, trace2: updatedTrace2);
 
     } catch (e) {
       // Ошибка опроса
@@ -2194,7 +2390,7 @@ class ObdNotifier extends StateNotifier<ObdState> {
           } else if (cmd == '020D00' && bytes.length >= 2) {
             result[label] = '${bytes[1]} км/ч';
           } else if (cmd == '024200' && bytes.length >= 3) {
-            result[label] = '${((bytes[1] * 256) + bytes[2]) / 1000.0} В';
+            result[label] = '${(((bytes[1] * 256) + bytes[2]) / 1000.0).toStringAsFixed(2)} В';
           }
         }
       }
@@ -2488,13 +2684,12 @@ import 'dart:io';
 
 class OtaService {
   // Константы твоего репозитория
-  static const String currentVersion = '2.1.0';
+  static const String currentVersion = '2.2.0';
   static const String githubRepo = 'MrValenOK/lada_vesta_scanner';
 
-  // Метод проверки обновлений
   static Future<Map<String, dynamic>?> checkForUpdates() async {
     final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 8);
+      ..connectionTimeout = const Duration(seconds: 5); // Уменьшили с 8
 
     try {
       final req = await client.getUrl(
@@ -2533,11 +2728,21 @@ class OtaService {
         };
       }
     } catch (e) {
-      // Игнорируем ошибки сети
+      // Не молчим — возвращаем специальный маркер, что API недоступен,
+      // но даем возможность открыть страницу релизов напрямую.
+      return {
+        'hasUpdate': false,
+        'error': 'API_UNREACHABLE',
+        'fallbackUrl': 'https://github.com/$githubRepo/releases/latest',
+      };
     } finally {
       client.close(force: true);
     }
-    return null;
+    return {
+      'hasUpdate': false,
+      'error': 'API_UNREACHABLE',
+      'fallbackUrl': 'https://github.com/$githubRepo/releases/latest',
+    };
   }
 
   // Сравнение версий (например, v2.2.0 > v2.1.0)
