@@ -3,7 +3,7 @@ import 'dart:io';
 
 class OtaService {
   // Константы твоего репозитория
-  static const String currentVersion = '2.3.0';
+  static const String currentVersion = '2.3.1';
   static const String githubRepo = 'MrValenOK/lada_vesta_scanner';
 
   static Future<Map<String, dynamic>?> checkForUpdates() async {

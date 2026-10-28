@@ -2,6 +2,10 @@ import 'dart:async';
 import 'package:flutter_bluetooth_classic_serial/flutter_bluetooth_classic.dart';
 
 class BluetoothService {
+  static final BluetoothService _instance = BluetoothService._internal();
+  factory BluetoothService() => _instance;
+  BluetoothService._internal();
+
   final FlutterBluetoothClassic _bt = FlutterBluetoothClassic();
   final StringBuffer _rxBuffer = StringBuffer();
   
@@ -21,9 +25,12 @@ class BluetoothService {
   }
 
   Future<bool> connect(String address) async {
+    // Если уже подключены, не переподключаемся
+    if (_isConnected) return true; 
     try {
       await _bt.connect(address);
       _isConnected = true;
+      
       _dataSubscription = _bt.onDataReceived.listen((data) {
         _rxBuffer.write(String.fromCharCodes(data.data));
       });
@@ -45,19 +52,23 @@ class BluetoothService {
 
   Future<String> sendCommand(String cmd, {int timeoutMs = 1200, int postDelayMs = 50}) async {
     if (!_isConnected) return 'ERR:NOT_CONNECTED';
+
     while (_cmdLock != null) {
       await _cmdLock!.future;
     }
+    
     final lock = Completer<void>();
     _cmdLock = lock;
 
     try {
       _rxBuffer.clear();
       await _bt.sendString('$cmd\r');
+
       final sw = Stopwatch()..start();
       while (sw.elapsedMilliseconds < timeoutMs) {
         await Future.delayed(const Duration(milliseconds: 20));
         final current = _rxBuffer.toString();
+        
         if (current.contains('>')) {
           if (postDelayMs > 0) await Future.delayed(Duration(milliseconds: postDelayMs));
           return current.replaceAll('>', '').replaceAll('\r', '\n').trim();
