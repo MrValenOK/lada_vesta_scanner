@@ -11,6 +11,15 @@ class BluetoothService {
 
   bool get isConnected => _isConnected;
 
+  Future<List<Map<String, String>>> getPairedDevices() async {
+    try {
+      final devices = await _bt.getPairedDevices();
+      return devices.map((d) => {'name': d.name, 'address': d.address}).toList();
+    } catch (e) {
+      return [];
+    }
+  }
+
   Future<bool> connect(String address) async {
     try {
       await _bt.connect(address);

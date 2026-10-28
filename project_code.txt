@@ -2,7 +2,7 @@
 name: lada_vesta_scanner
 description: VestaScan Pro - Advanced Lada Diagnostic Tool
 publish_to: 'none'
-version: 2.0.0+20
+version: 2.1.0+1
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
@@ -16,7 +16,6 @@ dependencies:
   url_launcher: ^6.2.5
   shared_preferences: ^2.2.2
   path_provider: ^2.1.2
-  flutter_markdown: ^0.7.1
 
 dev_dependencies:
   flutter_test:
@@ -27,15 +26,16 @@ flutter:
   uses-material-design: true
   assets:
     - lib/data/json_profiles/m86_uds.json
-// ===== END OF FILE =====
+
 // ===== FILE: lib/main.dart =====
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/theme.dart';
-import 'main_screen.dart'; // Подключаем новую оболочку
+import 'main_screen.dart';
 
 void main() {
   runApp(
+    // Обязательная обертка для Riverpod
     const ProviderScope(
       child: VestaScanApp(),
     ),
@@ -50,19 +50,18 @@ class VestaScanApp extends StatelessWidget {
     return MaterialApp(
       title: 'VestaScan Pro',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.lightTheme, // Для проверки темной темы поменяй на darkTheme
-      home: const MainScreen(),
+      theme: AppTheme.darkTheme, // Используем нашу новую темную тему
+      home: const MainScreen(), // Открываем главный экран с вкладками
     );
   }
 }
-// ===== END OF FILE =====
+
 // ===== FILE: lib/main_screen.dart =====
 import 'package:flutter/material.dart';
 import 'features/dashboard/dashboard_screen.dart';
-import 'features/journal/journal_screen.dart';
 import 'features/tests/tests_screen.dart';
+import 'features/journal/journal_screen.dart';
 import 'features/dtc/dtc_screen.dart';
-import 'services/trip_calculator.dart';
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key});
@@ -73,53 +72,63 @@ class MainScreen extends StatefulWidget {
 
 class _MainScreenState extends State<MainScreen> {
   int _selectedIndex = 0;
-  // Создаем калькулятор здесь, чтобы он жил всё время работы приложения
-  // и передавался на нужные экраны
-  final TripCalculator _tripCalculator = TripCalculator();
+
+  // Список наших экранов
+  final List<Widget> _screens = [
+    const DashboardScreen(),
+    const TestsScreen(),
+    const JournalScreen(),
+    const DtcScreen(),
+  ];
 
   @override
   Widget build(BuildContext context) {
-    // Список экранов для наших вкладок
-    final screens = [
-      DashboardScreen(tripCalculator: _tripCalculator),
-      const TestsScreen(),
-      JournalScreen(tripCalculator: _tripCalculator),
-      const DtcScreen(),
-    ];
-
     return Scaffold(
-      // IndexedStack сохраняет состояние (графики не сбросятся при переключении)
+      // IndexedStack сохраняет состояние экранов при переключении (графики не сбрасываются)
       body: IndexedStack(
         index: _selectedIndex,
-        children: screens,
+        children: _screens,
       ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _selectedIndex,
-        onTap: (index) {
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _selectedIndex,
+        onDestinationSelected: (index) {
           setState(() {
             _selectedIndex = index;
           });
         },
-        type: BottomNavigationBarType.fixed,
-        selectedItemColor: Theme.of(context).colorScheme.primary,
-        unselectedItemColor: Theme.of(context).textTheme.bodyMedium?.color,
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.dashboard), label: 'Датчики'),
-          BottomNavigationBarItem(icon: Icon(Icons.analytics), label: 'Анализ'),
-          BottomNavigationBarItem(icon: Icon(Icons.list_alt), label: 'Журнал'),
-          BottomNavigationBarItem(icon: Icon(Icons.memory), label: 'Коды'),
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.dashboard_outlined),
+            selectedIcon: Icon(Icons.dashboard),
+            label: 'Датчики',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.analytics_outlined),
+            selectedIcon: Icon(Icons.analytics),
+            label: 'Анализ',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.list_alt_outlined),
+            selectedIcon: Icon(Icons.list_alt),
+            label: 'Журнал',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.bug_report_outlined),
+            selectedIcon: Icon(Icons.bug_report),
+            label: 'Коды',
+          ),
         ],
       ),
     );
   }
 }
-// ===== END OF FILE =====
+
 // ===== FILE: lib/core/theme.dart =====
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class AppColors {
-  // Темная тема (Graphite Soft)
+  // Темная тема (Graphite Soft) из твоего дизайна v3.2
   static const darkBg = Color(0xFF0E1116);
   static const darkSurface = Color(0xFF151A21);
   static const darkSurface2 = Color(0xFF1D242E);
@@ -128,25 +137,17 @@ class AppColors {
   static const darkText2 = Color(0xFFA3ADBA);
   static const darkText3 = Color(0xFF6E7A89);
 
-  // Светлая тема (Paper Bright)
-  static const lightBg = Color(0xFFF2F5F8);
-  static const lightSurface = Color(0xFFFFFFFF);
-  static const lightSurface2 = Color(0xFFEAEFF4);
-  static const lightBorder = Color(0xFFD8E0E8);
-  static const lightText1 = Color(0xFF0E141B);
-  static const lightText2 = Color(0xFF4C5A6B);
-  static const lightText3 = Color(0xFF7A8798);
-
-  // Статусы (Универсальные)
+  // Акценты и статусы
+  static const darkAccent = Color(0xFFFBBF24); // Amber
+  static const darkAccentSoft = Color(0xFF2D2618);
   static const success = Color(0xFF43D68B);
   static const warning = Color(0xFFF2B44E);
   static const error = Color(0xFFFF7A76);
 
-  // Осциллограф (Графики)
+  // Осциллограф
   static const darkScopeBg = Color(0xFF10151D);
   static const darkScopeGrid = Color(0xFF243040);
-  static const trace1 = Color(0xFF6FB1FF); // УДК
-  static const trace2 = Color(0xFF43D68B); // ДДК
+  static const darkTrace1 = Color(0xFF6FB1FF);
 }
 
 class AppTheme {
@@ -154,62 +155,41 @@ class AppTheme {
     return ThemeData(
       brightness: Brightness.dark,
       scaffoldBackgroundColor: AppColors.darkBg,
-      primaryColor: const Color(0xFFFBBF24), // Акцент Amber
+      primaryColor: AppColors.darkAccent,
       colorScheme: const ColorScheme.dark(
-        primary: Color(0xFFFBBF24),
+        primary: AppColors.darkAccent,
         surface: AppColors.darkSurface,
         error: AppColors.error,
       ),
       textTheme: TextTheme(
-        displayLarge: GoogleFonts.manrope(color: AppColors.darkText1, fontWeight: FontWeight.w800),
-        titleLarge: GoogleFonts.manrope(color: AppColors.darkText1, fontWeight: FontWeight.w800, letterSpacing: -0.3),
         bodyLarge: GoogleFonts.manrope(color: AppColors.darkText1),
-        bodyMedium: GoogleFonts.manrope(color: AppColors.darkText2, fontWeight: FontWeight.w600),
-        labelSmall: GoogleFonts.manrope(color: AppColors.darkText3, letterSpacing: 0.5, fontWeight: FontWeight.bold),
-      ),
-      fontFamily: GoogleFonts.manrope().fontFamily,
-      useMaterial3: true,
-    );
-  }
-
-  static ThemeData get lightTheme {
-    return ThemeData(
-      brightness: Brightness.light,
-      scaffoldBackgroundColor: AppColors.lightBg,
-      primaryColor: const Color(0xFFB45309),
-      colorScheme: const ColorScheme.light(
-        primary: Color(0xFFB45309),
-        surface: AppColors.lightSurface,
-        error: AppColors.error,
-      ),
-      textTheme: TextTheme(
-        displayLarge: GoogleFonts.manrope(color: AppColors.lightText1, fontWeight: FontWeight.w800),
-        titleLarge: GoogleFonts.manrope(color: AppColors.lightText1, fontWeight: FontWeight.w800, letterSpacing: -0.3),
-        bodyLarge: GoogleFonts.manrope(color: AppColors.lightText1),
-        bodyMedium: GoogleFonts.manrope(color: AppColors.lightText2, fontWeight: FontWeight.w600),
-        labelSmall: GoogleFonts.manrope(color: AppColors.lightText3, letterSpacing: 0.5, fontWeight: FontWeight.bold),
+        bodyMedium: GoogleFonts.manrope(color: AppColors.darkText2),
+        labelSmall: GoogleFonts.manrope(
+            color: AppColors.darkText3,
+            letterSpacing: 0.5,
+            fontWeight: FontWeight.bold),
       ),
       fontFamily: GoogleFonts.manrope().fontFamily,
       useMaterial3: true,
     );
   }
 }
-// ===== END OF FILE =====
+
 // ===== FILE: lib/data/models/ecu_parameter.dart =====
 import 'dart:math' as math;
 
 class EcuParameter {
   final String id;
   final String name;
-  final int byteOffset; // Смещение байта в ответе ЭБУ
-  final int width;      // Количество байт (обычно 1 или 2)
+  final int byteOffset;
+  final int width;
   final double multiplier;
   final double divisor;
   final double offset;
-  final int decimals;   // Количество знаков после запятой
-  final bool signedComplement; // Использовать ли дополнительный код (Two's complement) для отрицательных чисел
-  final int bitIndex;   // Если -1, то это число. Если >= 0, то это битовый флаг (0 или 1)
-  final String unit;    // Единица измерения (например, "°C" или "%")
+  final int decimals;
+  final bool signedComplement;
+  final int bitIndex; // Если -1, то это число. Если >= 0, то битовый флаг (0 или 1)
+  final String unit;
 
   EcuParameter({
     required this.id,
@@ -243,7 +223,7 @@ class EcuParameter {
 
   /// Метод декодирования сырых байт в готовое значение
   double? decode(List<int> payload) {
-    // Проверка выхода за границы массива
+    // Защита от выхода за пределы массива
     if (byteOffset < 0 || byteOffset + width > payload.length) return null;
 
     int raw = 0;
@@ -265,25 +245,29 @@ class EcuParameter {
       }
     }
 
-    // Применяем формулу: (raw * multiplier / divisor) + offset
-    double v = raw * multiplier / divisor + offset;
+    // Применяем формулу
+    double v = (raw * multiplier / divisor) + offset;
     
     // Округляем до нужного количества знаков
-    final factor = math.pow(10, decimals);
-    v = (v * factor).roundToDouble() / factor;
+    if (decimals > 0) {
+      final factor = math.pow(10, decimals);
+      v = (v * factor).roundToDouble() / factor;
+    } else {
+      v = v.roundToDouble();
+    }
     
     // Избегаем "-0.0"
     return v == 0 ? 0.0 : v;
   }
 }
-// ===== END OF FILE =====
+
 // ===== FILE: lib/data/models/ecu_profile.dart =====
 import 'ecu_parameter.dart';
 
 class EcuRequestBlock {
   final String name;       // Название пакета (например, "Основные параметры")
-  final String kwpCommand; // Команда для старых блоков (например, "2101")
-  final String udsCommand; // Команда для новых блоков UDS (например, "220001" или "222001")
+  final String kwpCommand; // Команда для KWP2000 (например, "2101")
+  final String udsCommand; // Команда для UDS (например, "222001")
   final List<EcuParameter> parameters;
 
   EcuRequestBlock({
@@ -326,7 +310,7 @@ class EcuProfile {
     );
   }
 }
-// ===== END OF FILE =====
+
 // ===== FILE: lib/data/models/vehicle_profile.dart =====
 class VehicleProfile {
   final String id;
@@ -353,30 +337,40 @@ class VehicleProfile {
     );
   }
 }
-// ===== END OF FILE =====
+
 // ===== FILE: lib/features/dashboard/dashboard_screen.dart =====
 import 'dart:collection';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/obd_provider.dart';
 import '../../services/trip_calculator.dart';
-import 'widgets/trip_panel.dart';
-import 'widgets/oscilloscope.dart';
+import '../../core/theme.dart';
 
 class DashboardScreen extends ConsumerStatefulWidget {
-  final TripCalculator tripCalculator;
-
-  const DashboardScreen({super.key, required this.tripCalculator});
+  const DashboardScreen({super.key});
 
   @override
   ConsumerState<DashboardScreen> createState() => _DashboardScreenState();
 }
 
 class _DashboardScreenState extends ConsumerState<DashboardScreen> {
+  bool _focusAnomaliesOnly = false;
+
   @override
   Widget build(BuildContext context) {
     final obdState = ref.watch(obdProvider);
     final obdNotifier = ref.read(obdProvider.notifier);
+    final tripCalc = obdNotifier.tripCalculator;
+
+    // Достаем данные из провайдера
+    final liveData = obdState.liveData;
+    final rpm = liveData['rpm']?.toInt();
+    final ect = liveData['ect']?.toInt();
+    final volt = liveData['volt']; // Если парсим бортсеть
+    final stft = liveData['stft'];
+    final ltft = liveData['ltft'];
+    final tps = liveData['tps'];
+    final map = liveData['map'];
 
     return Scaffold(
       appBar: AppBar(
@@ -386,77 +380,82 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
             decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
+              color: AppColors.darkSurface,
               borderRadius: BorderRadius.circular(6),
-              border: Border.all(color: Theme.of(context).dividerColor),
+              border: Border.all(color: AppColors.darkBorder),
             ),
             child: const Center(
-              child: Text('М86 UDS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, fontFamily: 'JetBrains Mono')),
+              child: Text('M86 UDS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, fontFamily: 'JetBrains Mono')),
             ),
           ),
         ],
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TripPanel(
-                calculator: widget.tripCalculator,
-                onReset: () {
-                  setState(() {
-                    widget.tripCalculator.reset();
-                  });
-                },
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 90), // Отступ снизу для FAB
+          children: [
+            // --- ПЛАШКА ПОЕЗДКИ (БК) ---
+            _buildTripComputerCard(tripCalc, obdNotifier),
+            
+            const SizedBox(height: 16),
+            Text('ТЕЛЕМЕТРИЯ LIVE', style: Theme.of(context).textTheme.labelSmall),
+            const SizedBox(height: 8),
+
+            // --- СЕТКА ОСНОВНЫХ ДАТЧИКОВ ---
+            GridView.count(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisCount: MediaQuery.of(context).size.width > 600 ? 4 : 2,
+              crossAxisSpacing: 12,
+              mainAxisSpacing: 12,
+              childAspectRatio: 1.5,
+              children: [
+                _buildSensorCard(context, 'ОБОРОТЫ', '${rpm ?? "---"}', 'об/мин', true),
+                _buildSensorCard(context, 'ТЕМП. ОЖ', '${ect ?? "---"}', '°C', true),
+                _buildSensorCard(context, 'БОРТСЕТЬ', volt?.toStringAsFixed(2) ?? '14.10', 'В', false),
+                _buildSensorCard(context, 'STFT', stft?.toStringAsFixed(1) ?? '---', '%', false),
+              ],
+            ),
+
+            const SizedBox(height: 20),
+            // --- МАТРИЦА КОРРЕКЦИЙ ---
+            _buildTrimMapPlaceholder(), 
+
+            const SizedBox(height: 20),
+            // --- РАСШИРЕННЫЕ ПАРАМЕТРЫ М86 ---
+            _buildExtendedParams(liveData),
+
+            const SizedBox(height: 20),
+            // --- ОСЦИЛЛОГРАФ ---
+            Text('ОСЦИЛЛОГРАФ УДК', style: Theme.of(context).textTheme.labelSmall),
+            const SizedBox(height: 8),
+            Container(
+              height: 150,
+              decoration: BoxDecoration(
+                color: AppColors.darkScopeBg,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.darkBorder),
               ),
-              const SizedBox(height: 8),
-              Text(
-                'ТЕЛЕМЕТРИЯ LIVE',
-                style: Theme.of(context).textTheme.labelSmall,
+              child: Center(
+                child: obdState.trace1.isEmpty 
+                  ? const Text('Нет данных для графика', style: TextStyle(color: Colors.grey))
+                  : CustomPaint(
+                      painter: _SimpleScopePainter(trace: obdState.trace1),
+                      size: Size.infinite,
+                    ),
               ),
-              const SizedBox(height: 12),
-              SizedBox(
-                height: 180,
-                child: GridView.count(
-                  physics: const NeverScrollableScrollPhysics(),
-                  crossAxisCount: MediaQuery.of(context).size.width > 600 ? 4 : 2,
-                  crossAxisSpacing: 12,
-                  mainAxisSpacing: 12,
-                  childAspectRatio: 2.2,
-                  children: [
-                    _buildSensorCard(context, 'ОБОРОТЫ', '${obdState.liveData['rpm']?.toInt() ?? 0}', 'об/мин', true),
-                    _buildSensorCard(context, 'ТЕМП. ОЖ', '${obdState.liveData['ect']?.toInt() ?? 0}', '°C', true),
-                    _buildSensorCard(context, 'БОРТСЕТЬ', '14.10', 'В', false),
-                    _buildSensorCard(context, 'STFT', '-3.9', '%', false),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'ОСЦИЛЛОГРАФ',
-                style: Theme.of(context).textTheme.labelSmall,
-              ),
-              const SizedBox(height: 12),
-              Expanded(
-                child: Oscilloscope(
-                  trace1: Queue<double>.from(obdState.trace1),
-                  minValue: 0,
-                  maxValue: 1500,
-                  color1: const Color(0xFF6FB1FF),
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
       floatingActionButton: FloatingActionButton(
-        backgroundColor: obdState.isPolling ? Theme.of(context).colorScheme.error : Theme.of(context).primaryColor,
+        backgroundColor: obdState.isPolling ? AppColors.error : Theme.of(context).primaryColor,
         onPressed: () {
           if (obdState.isPolling) {
             obdNotifier.stopPolling();
           } else {
-            obdNotifier.connect('00:00:00:00:00:00').then((success) {
+            // В будущем здесь будет выбор адаптера из списка спаренных устройств
+            obdNotifier.connect('00:11:22:33:44:55').then((success) {
               if (success) obdNotifier.startPolling();
             });
           }
@@ -470,48 +469,150 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     );
   }
 
+  // --- ВИДЖЕТЫ ДЛЯ UI ---
+
   Widget _buildSensorCard(BuildContext context, String title, String value, String unit, bool isLive) {
     return Container(
-      padding: const EdgeInsets.all(8),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
+        color: AppColors.darkSurface,
         borderRadius: BorderRadius.circular(12),
         border: Border(
-          left: BorderSide(color: isLive ? Colors.green : Colors.grey, width: 4),
-          top: BorderSide(color: Theme.of(context).dividerColor),
-          right: BorderSide(color: Theme.of(context).dividerColor),
-          bottom: BorderSide(color: Theme.of(context).dividerColor),
+          left: BorderSide(color: isLive ? AppColors.success : AppColors.darkBorder, width: 4),
+          top: BorderSide(color: AppColors.darkBorder),
+          right: BorderSide(color: AppColors.darkBorder),
+          bottom: BorderSide(color: AppColors.darkBorder),
         ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Row(
-            children: [
-              Icon(Icons.speed, size: 14, color: Theme.of(context).textTheme.labelSmall?.color),
-              const SizedBox(width: 4),
-              Text(title, style: Theme.of(context).textTheme.labelSmall),
-            ],
-          ),
+          Text(title, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey)),
           Row(
             crossAxisAlignment: CrossAxisAlignment.baseline,
             textBaseline: TextBaseline.alphabetic,
             children: [
-              Text(
-                value,
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, fontFamily: 'JetBrains Mono'),
-              ),
+              Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, fontFamily: 'JetBrains Mono', color: Colors.white)),
               const SizedBox(width: 4),
-              Text(unit, style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 12)),
+              Text(unit, style: const TextStyle(fontSize: 12, color: Colors.grey)),
             ],
           ),
         ],
       ),
     );
   }
+
+  Widget _buildTripComputerCard(TripCalculator tripCalc, ObdNotifier notifier) {
+    final isMoving = (tripCalc.totalDistanceKm) > 0; // Упрощенная проверка
+    final instantStr = isMoving
+        ? '${tripCalc.instantFuelL100Km.toStringAsFixed(1)} л/100'
+        : '${tripCalc.instantFuelLpH.toStringAsFixed(2)} л/ч';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: AppColors.darkSurface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.darkBorder),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _tripStatItem('ПРОБЕГ', '${tripCalc.totalDistanceKm.toStringAsFixed(1)} км'),
+          Container(width: 1, height: 24, color: AppColors.darkBorder),
+          _tripStatItem('СРЕДНИЙ', '${tripCalc.averageConsumptionL100Km.toStringAsFixed(1)} л/100'),
+          Container(width: 1, height: 24, color: AppColors.darkBorder),
+          _tripStatItem('МГНОВ.', instantStr),
+          IconButton(
+            icon: const Icon(Icons.restart_alt, size: 18, color: Colors.grey),
+            onPressed: () {
+              notifier.tripCalculator.reset(); // Исправил с notifier.resetTrip() на tripCalculator.reset()
+            },
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _tripStatItem(String label, String val) {
+    return Column(
+      children: [
+        Text(label, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: Colors.grey)),
+        const SizedBox(height: 4),
+        Text(val, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, fontFamily: 'JetBrains Mono', color: Colors.white)),
+      ],
+    );
+  }
+
+  Widget _buildTrimMapPlaceholder() {
+    // Пока провайдер не отдает матрицу коррекций, показываем заглушку (мы перенесем её на след. шаге)
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: AppColors.darkSurface, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.darkBorder)),
+      child: const Text('МАТРИЦА КОРРЕКЦИЙ (Переносим из старого кода...)', style: TextStyle(color: Colors.grey)),
+    );
+  }
+
+  Widget _buildExtendedParams(Map<String, double> data) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(color: AppColors.darkSurface, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.darkBorder)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('ПАРАМЕТРЫ М86 (UDS)', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+          const Divider(color: AppColors.darkBorder),
+          _extRow('Пропуски Цил. 1-4', '${data['misfire_1']?.toInt() ?? 0} | ${data['misfire_2']?.toInt() ?? 0} | 0 | 0'),
+          _extRow('ДПДЗ', '${data['tps']?.toStringAsFixed(1) ?? '---'} %'),
+          _extRow('ДАД', '${data['map']?.toStringAsFixed(0) ?? '---'} кПа'),
+        ],
+      ),
+    );
+  }
+
+  Widget _extRow(String title, String val) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(title, style: const TextStyle(fontSize: 13, color: Colors.white70)),
+          Text(val, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, fontFamily: 'JetBrains Mono', color: AppColors.darkAccent)),
+        ],
+      ),
+    );
+  }
 }
-// ===== END OF FILE =====
+
+// Простой рисователь графика
+class _SimpleScopePainter extends CustomPainter {
+  final List<double> trace;
+  _SimpleScopePainter({required this.trace});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (trace.length < 2) return;
+    final paint = Paint()..color = AppColors.darkTrace1..strokeWidth = 2..style = PaintingStyle.stroke;
+    final path = Path();
+    final stepX = size.width / (trace.length - 1);
+    final maxVal = trace.reduce((a, b) => a > b ? a : b);
+
+    for (int i = 0; i < trace.length; i++) {
+      final x = i * stepX;
+      final y = size.height - ((trace[i] / (maxVal == 0 ? 1 : maxVal)) * size.height);
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    canvas.drawPath(path, paint);
+  }
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+}
+
 // ===== FILE: lib/features/dashboard/widgets/oscilloscope.dart =====
 import 'package:flutter/material.dart';
 import 'dart:collection';
@@ -643,7 +744,7 @@ class _ScopePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _ScopePainter oldDelegate) => true; 
 }
-// ===== END OF FILE =====
+
 // ===== FILE: lib/features/dashboard/widgets/trip_panel.dart =====
 import 'package:flutter/material.dart';
 import '../../../services/trip_calculator.dart';
@@ -753,7 +854,7 @@ class TripPanel extends StatelessWidget {
     );
   }
 }
-// ===== END OF FILE =====
+
 // ===== FILE: lib/features/dtc/dtc_screen.dart =====
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -945,27 +1046,25 @@ class _DtcScreenState extends ConsumerState<DtcScreen> {
     );
   }
 }
-// ===== END OF FILE =====
+
 // ===== FILE: lib/features/journal/journal_screen.dart =====
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/obd_provider.dart';
 import '../../services/ai_prompt_builder.dart';
-import '../../services/trip_calculator.dart';
 
 class JournalScreen extends ConsumerWidget {
-  final TripCalculator tripCalculator;
-
-  const JournalScreen({super.key, required this.tripCalculator});
+  const JournalScreen({super.key});
 
   void _generateAndCopyPrompt(BuildContext context, WidgetRef ref) {
     final state = ref.read(obdProvider);
+    final notifier = ref.read(obdProvider.notifier);
     
     final prompt = AiPromptBuilder.generateSnapshot(
       liveData: state.liveData,
-      tripDistance: tripCalculator.totalDistanceKm,
-      fuelConsumed: tripCalculator.totalFuelLiters,
+      tripDistance: notifier.tripCalculator.totalDistanceKm,
+      fuelConsumed: notifier.tripCalculator.totalFuelLiters,
     );
 
     // Копируем в буфер обмена
@@ -1099,7 +1198,7 @@ class JournalScreen extends ConsumerWidget {
     );
   }
 }
-// ===== END OF FILE =====
+
 // ===== FILE: lib/features/tests/tests_screen.dart =====
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -1260,13 +1359,18 @@ class TestsScreen extends ConsumerWidget {
     );
   }
 }
-// ===== END OF FILE =====
+
 // ===== FILE: lib/providers/obd_provider.dart =====
 import 'dart:async';
-import 'dart:math' as math;
+import 'dart:convert';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/bluetooth_service.dart';
+import '../services/obd_parser.dart';
+import '../services/trip_calculator.dart';
+import '../data/models/ecu_profile.dart';
 
+// 1. Класс состояния (что видит UI)
 class ObdState {
   final bool isConnected;
   final bool isPolling;
@@ -1295,71 +1399,145 @@ class ObdState {
   }
 }
 
+// 2. Провайдеры Riverpod
 final bluetoothServiceProvider = Provider((ref) => BluetoothService());
 
 final obdProvider = StateNotifierProvider<ObdNotifier, ObdState>((ref) {
   return ObdNotifier(ref.read(bluetoothServiceProvider));
 });
 
+// 3. Управляющий класс (Notifier)
 class ObdNotifier extends StateNotifier<ObdState> {
   final BluetoothService _btService;
   Timer? _pollTimer;
-  bool _isPollCycleBusy = false;
-  double _demoSineWave = 0.0;
+  bool _isUdsM86 = false;
 
-  ObdNotifier(this._btService) : super(ObdState());
+  // Делаем калькулятор поездки публичным, чтобы UI мог читать данные
+  final TripCalculator tripCalculator = TripCalculator();
 
+  EcuProfile? _ecuProfile;
+
+  ObdNotifier(this._btService) : super(ObdState()) {
+    _loadEcuProfile();
+  }
+
+  // Загружаем JSON профиль при старте
+  Future<void> _loadEcuProfile() async {
+    try {
+      final jsonString = await rootBundle.loadString('lib/data/json_profiles/m86_uds.json');
+      final jsonMap = jsonDecode(jsonString);
+      _ecuProfile = EcuProfile.fromJson(jsonMap);
+    } catch (e) {
+      // Ошибка загрузки игнорируется
+    }
+  }
+
+  // Сброс поездки
+  void resetTrip() {
+    tripCalculator.reset();
+    state = state.copyWith(); // Принудительное обновление UI
+  }
+
+  // Подключение к адаптеру
   Future<bool> connect(String macAddress) async {
+    final success = await _btService.connect(macAddress);
+    if (!success) return false;
+
+    // Инициализация ELM327
+    await _btService.sendCommand('ATZ', timeoutMs: 2000);
+    await _btService.sendCommand('ATE0');
+    await _btService.sendCommand('ATL0');
+    await _btService.sendCommand('ATS0');
+    await _btService.sendCommand('ATH0');
+    await _btService.sendCommand('ATSP6');
+    await _btService.sendCommand('ATAL');
+    await _btService.sendCommand('ATSH7E0');
+    await _btService.sendCommand('ATCRA7E8');
+
+    // Определение протокола (UDS или KWP)
+    final r81 = await _btService.sendCommand('1081', timeoutMs: 800);
+    if (!r81.replaceAll(' ', '').contains('5081')) {
+      final r03 = await _btService.sendCommand('1003', timeoutMs: 800);
+      if (r03.replaceAll(' ', '').contains('5003')) {
+        _isUdsM86 = true;
+      }
+    } else {
+      _isUdsM86 = false;
+    }
+
     state = state.copyWith(isConnected: true);
     return true;
   }
 
-  Future<void> disconnect() async {
-    stopPolling();
-    await _btService.disconnect();
-    state = state.copyWith(isConnected: false, liveData: {}, trace1: []);
-  }
-
+  // Запуск опроса
   void startPolling() {
     if (!state.isConnected || state.isPolling) return;
     state = state.copyWith(isPolling: true);
 
-    _pollTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) async {
+    _pollTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) async {
       await _pollCycle();
     });
   }
 
+  // Остановка опроса
   void stopPolling() {
     _pollTimer?.cancel();
     _pollTimer = null;
     state = state.copyWith(isPolling: false);
   }
 
+  // Один цикл опроса
   Future<void> _pollCycle() async {
-    if (_isPollCycleBusy) return;
-    _isPollCycleBusy = true;
+    if (!state.isConnected || _ecuProfile == null) return;
 
     try {
-      _demoSineWave += 0.2;
-      final double simulatedValue = (math.sin(_demoSineWave) * 400) + 800;
+      final block = _ecuProfile!.blocks.first;
+      final cmd = _isUdsM86 ? block.udsCommand : block.kwpCommand;
 
-      final updatedData = Map<String, double>.from(state.liveData);
-      updatedData['rpm'] = simulatedValue;
-      updatedData['ect'] = 88.0;
+      final response = await _btService.sendCommand(cmd, timeoutMs: 1500);
 
-      final updatedTrace = List<double>.from(state.trace1);
-      updatedTrace.add(simulatedValue);
-      if (updatedTrace.length > 100) {
-        updatedTrace.removeAt(0);
+      // Очищаем ответ (в зависимости от протокола префикс может быть 622001 или 6101)
+      final prefix = _isUdsM86 ? '622001' : '6101';
+      final bytes = ObdParser.extractBytes(response, prefix);
+
+      if (bytes != null && bytes.isNotEmpty) {
+        final updatedData = Map<String, double>.from(state.liveData);
+
+        // Проходим по всем параметрам из JSON и расшифровываем
+        for (final param in block.parameters) {
+          final val = param.decode(bytes);
+          if (val != null) {
+            updatedData[param.id] = val;
+          }
+        }
+
+        // Обновляем график (берем 'rpm', если он есть)
+        final updatedTrace = List<double>.from(state.trace1);
+        if (updatedData.containsKey('rpm')) {
+          updatedTrace.add(updatedData['rpm']!);
+          if (updatedTrace.length > 100) updatedTrace.removeAt(0);
+        }
+
+        // Обновляем состояние
+        state = state.copyWith(liveData: updatedData, trace1: updatedTrace);
+
+        // Кормим данные для расчета расхода топлива
+        tripCalculator.update(
+          rpm: updatedData['rpm']?.toInt() ?? 0,
+          speedKmh: 0.0, // Пока скорость не парсим, в будущем добавим PID 010D
+          airMassKgH: updatedData['map'] != null ? (updatedData['map']! * 0.5) : 0.0, // Оценочный расход воздуха
+          tpsPct: updatedData['tps'] ?? 0.0,
+          isDfcoActive: false, // Флаг ПХХ (пока не парсим)
+          stftPct: updatedData['stft'] ?? 0.0,
+          ltftPct: updatedData['ltft'] ?? 0.0,
+        );
       }
-
-      state = state.copyWith(liveData: updatedData, trace1: updatedTrace);
-    } finally {
-      _isPollCycleBusy = false;
+    } catch (e) {
+      // Ошибка опроса игнорируется
     }
   }
 }
-// ===== END OF FILE =====
+
 // ===== FILE: lib/services/ai_prompt_builder.dart =====
 class AiPromptBuilder {
   static String generateSnapshot({
@@ -1399,7 +1577,7 @@ class AiPromptBuilder {
     return buffer.toString();
   }
 }
-// ===== END OF FILE =====
+
 // ===== FILE: lib/services/bluetooth_service.dart =====
 import 'dart:async';
 import 'package:flutter_bluetooth_classic_serial/flutter_bluetooth_classic.dart';
@@ -1414,15 +1592,11 @@ class BluetoothService {
 
   bool get isConnected => _isConnected;
 
-  /// Инициализация и подключение к ELM327
   Future<bool> connect(String address) async {
     try {
       await _bt.connect(address);
       _isConnected = true;
-      
-      // Подписка на входящий поток байтов
       _dataSubscription = _bt.onDataReceived.listen((data) {
-        // Конвертируем байты в строку и добавляем в буфер
         _rxBuffer.write(String.fromCharCodes(data.data));
       });
       return true;
@@ -1432,7 +1606,6 @@ class BluetoothService {
     }
   }
 
-  /// Отключение
   Future<void> disconnect() async {
     try {
       await _dataSubscription?.cancel();
@@ -1442,43 +1615,26 @@ class BluetoothService {
     }
   }
 
-  /// Главный метод отправки команд с защитой от одновременных запросов
-  Future<String> sendCommand(
-    String cmd, {
-    int timeoutMs = 1200,
-    int postDelayMs = 50,
-  }) async {
+  Future<String> sendCommand(String cmd, {int timeoutMs = 1200, int postDelayMs = 50}) async {
     if (!_isConnected) return 'ERR:NOT_CONNECTED';
-
-    // Очередь команд: ждем, если шина занята
     while (_cmdLock != null) {
       await _cmdLock!.future;
     }
-    
     final lock = Completer<void>();
     _cmdLock = lock;
 
     try {
       _rxBuffer.clear();
-      // Отправляем команду с символом возврата каретки (требование ELM327)
       await _bt.sendString('$cmd\r');
-
       final sw = Stopwatch()..start();
       while (sw.elapsedMilliseconds < timeoutMs) {
         await Future.delayed(const Duration(milliseconds: 20));
         final current = _rxBuffer.toString();
-        
-        // Как только прилетел символ '>', адаптер закончил передачу
         if (current.contains('>')) {
-          if (postDelayMs > 0) {
-            await Future.delayed(Duration(milliseconds: postDelayMs));
-          }
-          // Очищаем ответ от символа '>' и лишних пробелов
+          if (postDelayMs > 0) await Future.delayed(Duration(milliseconds: postDelayMs));
           return current.replaceAll('>', '').replaceAll('\r', '\n').trim();
         }
       }
-      
-      // Если уперлись в таймаут, отдаем то, что успели получить
       return _rxBuffer.toString().trim();
     } catch (e) {
       return 'ERR:$e';
@@ -1488,85 +1644,115 @@ class BluetoothService {
     }
   }
 }
-// ===== END OF FILE =====
+
 // ===== FILE: lib/services/obd_parser.dart =====
+// ISO 15765-2 парсер. Не блокирует кадры с байтом 7F внутри данных.
+// Отсекает только реальный Negative Response (7F + код сервиса в начале).
 class ObdParser {
-  /// Проверяет, является ли ответ отрицательным (NRC - Negative Response Code)
-  static bool isNegativeResponse(String resp) {
-    final upper = resp.toUpperCase().trim();
-    if (upper.isEmpty || 
-        upper.contains('NO DATA') || 
-        upper.contains('ERROR') || 
-        upper.contains('UNABLE') || 
-        upper.contains('?')) {
-      return true;
-    }
-    final clean = upper.replaceAll(RegExp(r'[^0-9A-F]'), '');
-    if (clean.isEmpty) return true;
-    // 7F - маркер ошибки протокола (например, 7F 21 11)
-    return RegExp(r'^(03)?7F[0-9A-F]{4}').hasMatch(clean);
-  }
-
-  /// Извлекает чистые байты из ответа ELM327, игнорируя эхо, заголовки и мусор.
-  /// expectedPrefix - ожидаемый ответ (например, "620001" на запрос "220001")
   static List<int>? extractBytes(String resp, String expectedPrefix) {
-    if (isNegativeResponse(resp)) return null;
+    final upper = resp.toUpperCase();
+    if (upper.contains('NO DATA') ||
+        upper.contains('ERROR') ||
+        upper.contains('UNABLE') ||
+        upper.contains('STOPPED') ||
+        upper.contains('?')) {
+      return null;
+    }
 
-    final lines = resp.toUpperCase().split(RegExp(r'[\r\n]+'));
+    int? expectedTotalLen;
+    final lines = upper.split(RegExp(r'[\r\n]+'));
     final cleanHexBuf = StringBuffer();
 
-    for (var line in lines) {
-      line = line.trim();
+    for (int lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+      var line = lines[lineIdx].trim();
       if (line.isEmpty || line.startsWith('SEARCHING')) continue;
-      
-      // Очищаем от CAN-заголовков (например, 7E8 для двигателя)
-      if (line.startsWith('7E8')) {
-        line = line.substring(3).trim();
+
+      // 12-битный заголовок длины ISO-TP («01A», «024») идёт отдельной первой строкой
+      if (lineIdx == 0 &&
+          line.length == 3 &&
+          RegExp(r'^[0-9A-F]{3}$').hasMatch(line)) {
+        expectedTotalLen = int.tryParse(line, radix: 16);
+        continue;
       }
-      
-      // Очищаем от нумерации строк многокадровых сообщений (0:, 1: и т.д.)
+
+      // Отрезаем префикс номера кадра ISO-TP ("0:", "1:", "2:", ...)
       final colonIdx = line.indexOf(':');
       if (colonIdx != -1 && colonIdx <= 2) {
         line = line.substring(colonIdx + 1).trim();
       }
 
-      // Оставляем только HEX-символы
+      // Отрезаем CAN-ID заголовки вида 7E8
+      if (line.startsWith('7E8')) {
+        line = line.substring(3).trim();
+      }
+
       final hexOnly = line.replaceAll(RegExp(r'[^0-9A-F]'), '');
       cleanHexBuf.write(hexOnly);
     }
 
     final clean = cleanHexBuf.toString();
-    final pref = expectedPrefix.toUpperCase();
-    
-    // Ищем начало полезной нагрузки
-    final idx = clean.indexOf(pref);
-    if (idx == -1) return null; 
+    if (clean.isEmpty) return null;
 
-    // Достаем всё, что идет после префикса
+    // Проверка Negative Response только в начале ответа
+    final pref = expectedPrefix.toUpperCase();
+    if (pref.length >= 2) {
+      final respServiceByte = int.tryParse(pref.substring(0, 2), radix: 16);
+      if (respServiceByte != null && respServiceByte >= 0x40) {
+        final reqServiceHex = (respServiceByte - 0x40)
+            .toRadixString(16)
+            .padLeft(2, '0')
+            .toUpperCase();
+        if (clean.startsWith('7F$reqServiceHex') ||
+            clean.startsWith('037F$reqServiceHex')) {
+          return null;
+        }
+      }
+    }
+
+    final idx = clean.indexOf(pref);
+    if (idx == -1) return null;
+
     final hexData = clean.substring(idx + pref.length);
     final bytes = <int>[];
-    
-    // Переводим текст в массив байтов
     for (int i = 0; i + 1 < hexData.length; i += 2) {
       final b = int.tryParse(hexData.substring(i, i + 2), radix: 16);
       if (b != null) bytes.add(b);
     }
-    
+
+    final payloadMaxLen = expectedTotalLen != null
+        ? (expectedTotalLen - (pref.length ~/ 2))
+        : null;
+    if (payloadMaxLen != null &&
+        payloadMaxLen > 0 &&
+        bytes.length > payloadMaxLen) {
+      return bytes.sublist(0, payloadMaxLen);
+    }
     return bytes;
   }
+
+  static int? tryParseMode06Counter(String resp, String expectedPrefix) {
+    final b = extractBytes(resp, expectedPrefix);
+    if (b == null || b.length < 4) return null;
+    if (b.length >= 5) return (b[3] * 256) + b[4];
+    return (b[2] * 256) + b[3];
+  }
 }
-// ===== END OF FILE =====
+
 // ===== FILE: lib/services/trip_calculator.dart =====
 class TripCalculator {
   double totalDistanceKm = 0.0;
   double totalFuelLiters = 0.0;
   double maxSpeedKmh = 0.0;
-  
+
+  // Текущие показатели для вывода на дашборд в реальном времени
+  double instantFuelLpH = 0.0;
+  double instantFuelL100Km = 0.0;
+
   DateTime? _lastTickTime;
-  
-  // Константы
+
+  // Константы для бензина АИ-92 / АИ-95
   final double stoichiometricRatio = 14.7;
-  final double fuelDensityKgL = 0.75;
+  final double fuelDensityKgL = 0.75; // ~0.75 кг/л при 15-20°C
 
   void update({
     required int rpm,
@@ -1574,20 +1760,21 @@ class TripCalculator {
     required double airMassKgH,
     required double tpsPct,
     required bool isDfcoActive,
+    double stftPct = 0.0, // Краткосрочная коррекция М86 (%)
+    double ltftPct = 0.0, // Долгосрочная коррекция М86 (%)
   }) {
     final now = DateTime.now();
-    
     if (_lastTickTime == null) {
       _lastTickTime = now;
       return;
     }
-    
+
     final deltaTimeSec = now.difference(_lastTickTime!).inMilliseconds / 1000.0;
     final deltaHours = deltaTimeSec / 3600.0;
     _lastTickTime = now;
 
-    // Защита от слишком долгих пауз (например, потеря связи Bluetooth)
-    if (deltaTimeSec > 5.0) return;
+    // Защита от зависания Bluetooth или паузы опроса
+    if (deltaTimeSec <= 0.0 || deltaTimeSec > 5.0) return;
 
     // 1. Интеграл скорости (пробег)
     if (speedKmh > 0) {
@@ -1595,28 +1782,42 @@ class TripCalculator {
       if (speedKmh > maxSpeedKmh) maxSpeedKmh = speedKmh;
     }
 
-    // 2. Расчет расхода топлива с защитой ПХХ (отсечка)
+    // 2. Расход топлива с защитой ПХХ (отсечка топливоподачи)
     double currentFuelKgH = 0.0;
-    final bool isCutoff = isDfcoActive || (tpsPct < 2.0 && rpm > 1500);
 
-    if (!isCutoff) {
-      currentFuelKgH = airMassKgH / stoichiometricRatio;
+    // Если ЭБУ остановил двигатель (rpm == 0) или активен режим ПХХ — подача 0
+    final bool isCutoff = (rpm < 300) || isDfcoActive || (tpsPct < 2.0 && rpm > 1500);
+
+    if (!isCutoff && airMassKgH > 0) {
+      // Коэффициент коррекции смеси по УДК (например, STFT -3.9% и LTFT +0.8%)
+      final double trimFactor = (1.0 + (stftPct / 100.0)) * (1.0 + (ltftPct / 100.0));
+      currentFuelKgH = (airMassKgH / stoichiometricRatio) * trimFactor;
     }
 
-    final currentFuelLpH = currentFuelKgH / fuelDensityKgL;
-    totalFuelLiters += currentFuelLpH * deltaHours;
+    // Перевод из кг/ч в л/ч
+    instantFuelLpH = currentFuelKgH / fuelDensityKgL;
+    totalFuelLiters += instantFuelLpH * deltaHours;
+
+    // Мгновенный путевой расход (считаем только при движении > 5 км/ч)
+    if (speedKmh >= 5.0) {
+      instantFuelL100Km = (instantFuelLpH / speedKmh) * 100.0;
+    } else {
+      instantFuelL100Km = 0.0; // На месте показываем instantFuelLpH (л/ч)
+    }
   }
 
+  // Средний расход на 100 км за поездку
   double get averageConsumptionL100Km {
     if (totalDistanceKm < 0.1) return 0.0;
-    return (totalFuelLiters / totalDistanceKm) * 100;
+    return (totalFuelLiters / totalDistanceKm) * 100.0;
   }
-  
+
   void reset() {
     totalDistanceKm = 0.0;
     totalFuelLiters = 0.0;
     maxSpeedKmh = 0.0;
+    instantFuelLpH = 0.0;
+    instantFuelL100Km = 0.0;
     _lastTickTime = null;
   }
 }
-// ===== END OF FILE =====

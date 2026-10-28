@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/obd_provider.dart';
+import '../../core/theme.dart';
 
 class DtcScreen extends ConsumerStatefulWidget {
   const DtcScreen({super.key});
@@ -12,44 +13,38 @@ class DtcScreen extends ConsumerStatefulWidget {
 class _DtcScreenState extends ConsumerState<DtcScreen> {
   bool _isLoading = false;
   bool _hasScanned = false;
-  List<Map<String, String>> _dtcs = []; // Список найденных ошибок
+  List<String> _dtcs = []; // Теперь храним просто строки кодов
+  Map<String, String> _freezeFrameData = {};
 
   void _scanDtc() async {
-    final state = ref.read(obdProvider);
-    if (!state.isConnected) {
+    final obdNotifier = ref.read(obdProvider.notifier);
+    if (!ref.read(obdProvider).isConnected) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('Сначала подключитесь к автомобилю!'),
-          backgroundColor: Theme.of(context).colorScheme.error,
-        ),
+        const SnackBar(content: Text('Сначала подключитесь к автомобилю!'), backgroundColor: AppColors.error),
       );
       return;
     }
 
     setState(() => _isLoading = true);
 
-    // В реальном приложении здесь отправляем UDS-команду 19 02 08
-    // Пока имитируем задержку ответа от ЭБУ
-    await Future.delayed(const Duration(seconds: 2));
+    // Вызываем реальный опрос ЭБУ
+    final codes = await obdNotifier.readDtcs();
 
     if (mounted) {
       setState(() {
         _isLoading = false;
         _hasScanned = true;
-        // Демо-данные (позже прикрутим базу данных расшифровок)
-        _dtcs = [
-          {'code': 'P0134', 'desc': 'Датчик кислорода 1 (до нейтрализатора), обрыв цепи сигнала', 'status': 'Активная (Текущая)'},
-          {'code': 'P0300', 'desc': 'Обнаружены случайные/множественные пропуски воспламенения', 'status': 'Сохраненная (Историческая)'},
-        ];
+        _dtcs = codes;
       });
     }
   }
 
   void _clearDtc() async {
+    final obdNotifier = ref.read(obdProvider.notifier);
     setState(() => _isLoading = true);
     
-    // UDS-команда сброса: 14 FF FF FF
-    await Future.delayed(const Duration(seconds: 1));
+    // Отправляем команду стирания (04 для OBD2, 14FFFFFF для UDS)
+    await obdNotifier.clearDtcs();
 
     if (mounted) {
       setState(() {
@@ -57,16 +52,7 @@ class _DtcScreenState extends ConsumerState<DtcScreen> {
         _dtcs = [];
       });
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Row(
-            children: [
-              Icon(Icons.cleaning_services, color: Colors.white),
-              SizedBox(width: 12),
-              Text('Коды ошибок успешно стерты из памяти ЭБУ!'),
-            ],
-          ),
-          backgroundColor: Theme.of(context).colorScheme.primary,
-        ),
+        const SnackBar(content: Text('Коды ошибок успешно стерты!'), backgroundColor: AppColors.success),
       );
     }
   }
@@ -74,9 +60,7 @@ class _DtcScreenState extends ConsumerState<DtcScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Коды неисправностей', style: TextStyle(fontWeight: FontWeight.w800)),
-      ),
+      appBar: AppBar(title: const Text('Коды неисправностей', style: TextStyle(fontWeight: FontWeight.w800))),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
@@ -86,16 +70,13 @@ class _DtcScreenState extends ConsumerState<DtcScreen> {
                 Expanded(
                   child: ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Theme.of(context).colorScheme.surface,
-                      foregroundColor: Theme.of(context).colorScheme.primary,
-                      side: BorderSide(color: Theme.of(context).colorScheme.primary),
+                      backgroundColor: AppColors.darkSurface,
+                      foregroundColor: AppColors.darkAccent,
+                      side: const BorderSide(color: AppColors.darkAccent),
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                     onPressed: _isLoading ? null : _scanDtc,
-                    icon: _isLoading 
-                        ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) 
-                        : const Icon(Icons.search),
+                    icon: _isLoading ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.search),
                     label: const Text('ПРОЧИТАТЬ', style: TextStyle(fontWeight: FontWeight.bold)),
                   ),
                 ),
@@ -103,11 +84,9 @@ class _DtcScreenState extends ConsumerState<DtcScreen> {
                 Expanded(
                   child: ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Theme.of(context).colorScheme.error.withAlpha(25), // ~0.1 opacity
-                      foregroundColor: Theme.of(context).colorScheme.error,
+                      backgroundColor: AppColors.error.withAlpha(25),
+                      foregroundColor: AppColors.error,
                       padding: const EdgeInsets.symmetric(vertical: 14),
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
                     onPressed: (_isLoading || _dtcs.isEmpty) ? null : _clearDtc,
                     icon: const Icon(Icons.delete_forever),
@@ -119,15 +98,13 @@ class _DtcScreenState extends ConsumerState<DtcScreen> {
             const SizedBox(height: 24),
             Expanded(
               child: !_hasScanned 
-                  ? Center(
-                      child: Text('Нажмите "Прочитать", чтобы опросить ЭБУ', 
-                          style: Theme.of(context).textTheme.bodyMedium))
+                  ? const Center(child: Text('Нажмите "Прочитать", чтобы опросить ЭБУ', style: TextStyle(color: Colors.grey)))
                   : _dtcs.isEmpty
                       ? const Center(
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.check_circle_outline, color: Colors.green, size: 64),
+                              Icon(Icons.check_circle_outline, color: AppColors.success, size: 64),
                               SizedBox(height: 16),
                               Text('Ошибок не обнаружено', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                             ],
@@ -136,46 +113,22 @@ class _DtcScreenState extends ConsumerState<DtcScreen> {
                       : ListView.builder(
                           itemCount: _dtcs.length,
                           itemBuilder: (context, index) {
-                            final dtc = _dtcs[index];
-                            final isStored = dtc['status']!.contains('Сохраненная');
-                            final statusColor = isStored ? Colors.orange : Theme.of(context).colorScheme.error;
-                            
+                            final code = _dtcs[index];
                             return Card(
                               margin: const EdgeInsets.only(bottom: 12),
-                              color: Theme.of(context).colorScheme.surface,
+                              color: AppColors.darkSurface,
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12),
-                                side: BorderSide(color: statusColor),
+                                side: const BorderSide(color: AppColors.error),
                               ),
-                              child: Padding(
-                                padding: const EdgeInsets.all(16.0),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Text(
-                                          dtc['code']!,
-                                          style: TextStyle(
-                                            fontSize: 20, 
-                                            fontWeight: FontWeight.bold,
-                                            color: statusColor,
-                                          ),
-                                        ),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                          decoration: BoxDecoration(
-                                            color: statusColor.withAlpha(25), // ~0.1 opacity
-                                            borderRadius: BorderRadius.circular(6),
-                                          ),
-                                          child: Text(dtc['status']!, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Text(dtc['desc']!, style: Theme.of(context).textTheme.bodyLarge),
-                                  ],
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(12),
+                                onTap: () => _showFreezeFrame(code),
+                                child: ListTile(
+                                  leading: const Icon(Icons.warning_amber_rounded, color: AppColors.error),
+                                  title: Text(code, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, fontFamily: 'monospace', color: AppColors.error)),
+                                  subtitle: const Text('Нажмите для просмотра стоп-кадра', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                                  trailing: const Icon(Icons.chevron_right, color: Colors.grey),
                                 ),
                               ),
                             );
@@ -185,6 +138,80 @@ class _DtcScreenState extends ConsumerState<DtcScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Future<void> _showFreezeFrame(String code) async {
+    final obdNotifier = ref.read(obdProvider.notifier);
+    
+    // Показываем шторку с загрузкой
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.darkSurface,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            // Запускаем чтение один раз
+            if (!_isLoading && _dtcs.isNotEmpty) {
+              Future.microtask(() async {
+                final data = await obdNotifier.getFreezeFrame(code);
+                if (mounted) {
+                  setSheetState(() {
+                    _freezeFrameData = data;
+                  });
+                }
+              });
+            }
+
+            return Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(color: AppColors.errorSoft, borderRadius: BorderRadius.circular(8)),
+                        child: Text(code, style: const TextStyle(color: AppColors.error, fontWeight: FontWeight.bold, fontSize: 16)),
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(child: Text('Стоп-кадр', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold))),
+                      if (_freezeFrameData.isEmpty) const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  if (_freezeFrameData.isEmpty)
+                    const Text('Запрос данных у ЭБУ...', style: TextStyle(color: Colors.grey))
+                  else
+                    ..._freezeFrameData.entries.map((e) => Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(e.key, style: const TextStyle(color: Colors.grey, fontSize: 14)),
+                          Text(e.value, style: const TextStyle(color: AppColors.darkAccent, fontWeight: FontWeight.bold, fontSize: 14, fontFamily: 'monospace')),
+                        ],
+                      ),
+                    )),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(backgroundColor: AppColors.darkSurface2),
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Закрыть', style: TextStyle(color: Colors.white)),
+                    ),
+                  )
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }

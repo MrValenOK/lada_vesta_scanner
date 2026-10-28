@@ -1,150 +1,168 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/obd_provider.dart';
-import '../../services/ai_prompt_builder.dart';
+import '../../data/models/nuance_event.dart';
+import '../../core/theme.dart';
 
-class JournalScreen extends ConsumerWidget {
+class JournalScreen extends ConsumerStatefulWidget {
   const JournalScreen({super.key});
 
-  void _generateAndCopyPrompt(BuildContext context, WidgetRef ref) {
-    final state = ref.read(obdProvider);
-    final notifier = ref.read(obdProvider.notifier);
+  @override
+  ConsumerState<JournalScreen> createState() => _JournalScreenState();
+}
+
+class _JournalScreenState extends ConsumerState<JournalScreen> {
+  bool _isExporting = false;
+
+  Future<void> _exportCsv() async {
+    final obdNotifier = ref.read(obdProvider.notifier);
+    setState(() => _isExporting = true);
     
-    final prompt = AiPromptBuilder.generateSnapshot(
-      liveData: state.liveData,
-      tripDistance: notifier.tripCalculator.totalDistanceKm,
-      fuelConsumed: notifier.tripCalculator.totalFuelLiters,
-    );
-
-    // Копируем в буфер обмена
-    Clipboard.setData(ClipboardData(text: prompt));
-
-    // Показываем красивое уведомление
+    final result = await obdNotifier.exportJournalToCsv();
+    
+    if (!mounted) return;
+    setState(() => _isExporting = false);
+    
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: const Row(
-          children: [
-            Icon(Icons.check_circle, color: Colors.white),
-            SizedBox(width: 12),
-            Text('Умный снапшот скопирован в буфер!'),
-          ],
-        ),
-        backgroundColor: Theme.of(context).colorScheme.primary,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        content: Text(result),
+        backgroundColor: result.startsWith('✅') ? AppColors.success : AppColors.warning,
+        duration: const Duration(seconds: 5),
       ),
     );
+  }
+
+  void _clearJournal() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.darkSurface,
+        title: const Text('Очистить журнал?', style: TextStyle(color: Colors.white)),
+        content: const Text('Все события будут удалены из памяти. Это действие нельзя отменить.', style: TextStyle(color: Colors.grey)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Очистить', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    
+    if (confirmed == true) {
+      ref.read(obdProvider.notifier).clearJournal();
+    }
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
+    final state = ref.watch(obdProvider);
+    final nuances = state.nuances;
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Журнал сессий', style: TextStyle(fontWeight: FontWeight.w800)),
+        title: Text('Журнал событий (${nuances.length})', style: const TextStyle(fontWeight: FontWeight.w800)),
+        actions: [
+          IconButton(
+            icon: _isExporting 
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.darkAccent))
+                : const Icon(Icons.save_alt_rounded, color: AppColors.darkAccent),
+            tooltip: 'Экспорт в CSV',
+            onPressed: _isExporting ? null : _exportCsv,
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline, color: Colors.grey),
+            tooltip: 'Очистить журнал',
+            onPressed: _clearJournal,
+          ),
+        ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Карточка создания снапшота
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    Theme.of(context).colorScheme.primary,
-                    Theme.of(context).colorScheme.primary.withAlpha(178), // ~0.7 opacity
-                  ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
+      body: nuances.isEmpty
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Text(
+                  'Журнал чист.\nАномалии будут автоматически регистрироваться здесь с счетчиком HZ.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey, fontSize: 14, height: 1.5),
                 ),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Row(
-                    children: [
-                      Icon(Icons.auto_awesome, color: Colors.white, size: 28),
-                      SizedBox(width: 12),
-                      Text(
-                        'AI Анализ',
-                        style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Сгенерируйте подробный текстовый отчет о текущем состоянии двигателя, чтобы отправить его нейросети для поиска неисправностей.',
-                    style: TextStyle(color: Colors.white70, height: 1.4),
-                  ),
-                  const SizedBox(height: 20),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white,
-                        foregroundColor: Theme.of(context).colorScheme.primary,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                      onPressed: () => _generateAndCopyPrompt(context, ref),
-                      icon: const Icon(Icons.copy),
-                      label: const Text('Скопировать Снапшот', style: TextStyle(fontWeight: FontWeight.bold)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-            Text('ИСТОРИЯ (ДЕМО)', style: Theme.of(context).textTheme.labelSmall),
-            const SizedBox(height: 12),
-            Expanded(
-              child: ListView(
-                children: [
-                  _buildHistoryCard(context, 'Утро, Холодный пуск', '12 Окт 2026', 'Ошибок нет'),
-                  _buildHistoryCard(context, 'Трасса М4, под нагрузкой', '10 Окт 2026', 'Высокий LTFT (+12%)', isWarning: true),
-                ],
               ),
             )
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildHistoryCard(BuildContext context, String title, String date, String status, {bool isWarning = false}) {
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      color: Theme.of(context).colorScheme.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: Theme.of(context).dividerColor),
-      ),
-      child: ListTile(
-        leading: Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: isWarning ? Theme.of(context).colorScheme.error.withAlpha(25) : Theme.of(context).colorScheme.primary.withAlpha(25), // ~0.1 opacity
-            shape: BoxShape.circle,
-          ),
-          child: Icon(
-            isWarning ? Icons.warning_amber_rounded : Icons.check_circle_outline,
-            color: isWarning ? Theme.of(context).colorScheme.error : Theme.of(context).colorScheme.primary,
-          ),
-        ),
-        title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-        subtitle: Text(date),
-        trailing: Text(
-          status,
-          style: TextStyle(
-            color: isWarning ? Theme.of(context).colorScheme.error : Theme.of(context).textTheme.bodyMedium?.color,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ),
+          : ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: nuances.length,
+              itemBuilder: (ctx, i) {
+                final e = nuances[i];
+                final color = e.severity == NuanceSeverity.critical 
+                    ? AppColors.error
+                    : (e.severity == NuanceSeverity.warning 
+                        ? AppColors.warning 
+                        : AppColors.darkAccent);
+                
+                return Card(
+                  color: AppColors.darkSurface,
+                  margin: const EdgeInsets.only(bottom: 10),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(color: color.withAlpha(80)),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              e.severity == NuanceSeverity.critical 
+                                  ? Icons.error_outline 
+                                  : Icons.warning_amber_rounded,
+                              color: color,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                e.title,
+                                style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 14),
+                              ),
+                            ),
+                            if (e.hzCount > 1)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(color: color.withAlpha(40), borderRadius: BorderRadius.circular(6)),
+                                child: Text('HZ: ${e.hzCount}', style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(e.description, style: const TextStyle(color: Colors.grey, fontSize: 12, height: 1.4)),
+                        if (e.snapshot.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: e.snapshot.entries.map((entry) {
+                              return Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                decoration: BoxDecoration(color: AppColors.darkSurface2, borderRadius: BorderRadius.circular(6)),
+                                child: Text(
+                                  '${entry.key}: ${entry.value}',
+                                  style: const TextStyle(color: AppColors.darkText2, fontSize: 10, fontWeight: FontWeight.w700),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ],
+                        const SizedBox(height: 8),
+                        Text(e.timeStr, style: const TextStyle(color: AppColors.darkText3, fontSize: 10, fontFamily: 'monospace')),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
     );
   }
 }

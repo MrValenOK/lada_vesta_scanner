@@ -1,0 +1,2646 @@
+// ===== FILE: pubspec.yaml =====
+name: lada_vesta_scanner
+description: VestaScan Pro - Advanced Lada Diagnostic Tool
+publish_to: 'none'
+version: 2.1.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.5.1
+  google_fonts: ^6.2.1
+  flutter_bluetooth_classic_serial: ^1.3.2
+  url_launcher: ^6.3.3
+  shared_preferences: ^2.5.6
+  path_provider: ^2.1.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - lib/data/json_profiles/m86_uds.json
+// ===== END OF FILE =====
+
+// ===== FILE: lib/core/theme.dart =====
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+
+class AppColors {
+  // Фон и поверхности (Graphite Soft)
+  static const darkBg = Color(0xFF0E1116);
+  static const darkSurface = Color(0xFF151A21);
+  static const darkSurface2 = Color(0xFF1D242E);
+  static const darkBorder = Color(0xFF2A323E);
+  
+  // Текст
+  static const darkText1 = Color(0xFFE9EDF2);
+  static const darkText2 = Color(0xFFA3ADBA);
+  static const darkText3 = Color(0xFF6E7A89);
+
+  // Акцент (Amber)
+  static const darkAccent = Color(0xFFFBBF24);
+  static const darkAccentSoft = Color(0xFF2D2618);
+
+  // Статусы
+  static const success = Color(0xFF43D68B);
+  static const successSoft = Color(0xFF142E24);
+  static const warning = Color(0xFFF2B44E);
+  static const warningSoft = Color(0xFF2E2416);
+  static const error = Color(0xFFFF7A76);
+  static const errorSoft = Color(0xFF321C1E);
+
+  // Осциллограф и зоны
+  static const darkScopeBg = Color(0xFF10151D);
+  static const darkScopeGrid = Color(0xFF243040);
+  static const darkTrace1 = Color(0xFF6FB1FF); // УДК
+  static const darkTrace2 = Color(0xFF43D68B); // ДДК
+  static const bandUdk = Color(0x1A6FB1FF);   // Зона УДК
+  static const bandDdk = Color(0x2443D68B);   // Окно ДДК
+  static const bandRef = Color(0x1AFBBF24);   // Опорная 1.2-1.7
+}
+
+class AppTheme {
+  static ThemeData get darkTheme {
+    return ThemeData(
+      brightness: Brightness.dark,
+      scaffoldBackgroundColor: AppColors.darkBg,
+      primaryColor: AppColors.darkAccent,
+      colorScheme: const ColorScheme.dark(
+        primary: AppColors.darkAccent,
+        surface: AppColors.darkSurface,
+        error: AppColors.error,
+      ),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: AppColors.darkBg,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+      ),
+      textTheme: TextTheme(
+        bodyLarge: GoogleFonts.manrope(color: AppColors.darkText1),
+        bodyMedium: GoogleFonts.manrope(color: AppColors.darkText2),
+        bodySmall: GoogleFonts.manrope(color: AppColors.darkText3, fontSize: 12),
+        labelSmall: GoogleFonts.manrope(
+          color: AppColors.darkText3,
+          letterSpacing: 0.9,
+          fontWeight: FontWeight.w800,
+          fontSize: 11,
+        ),
+      ),
+      fontFamily: GoogleFonts.manrope().fontFamily,
+      useMaterial3: true,
+    );
+  }
+}
+// ===== END OF FILE =====
+
+// ===== FILE: lib/data/models/ecu_parameter.dart =====
+import 'dart:math' as math;
+
+class EcuParameter {
+  final String id;
+  final String name;
+  final int byteOffset;
+  final int width;
+  final double multiplier;
+  final double divisor;
+  final double offset;
+  final int decimals;
+  final bool signedComplement;
+  final int bitIndex; // Если -1, то это число. Если >= 0, то битовый флаг (0 или 1)
+  final String unit;
+
+  EcuParameter({
+    required this.id,
+    required this.name,
+    required this.byteOffset,
+    required this.width,
+    this.multiplier = 1.0,
+    this.divisor = 1.0,
+    this.offset = 0.0,
+    this.decimals = 0,
+    this.signedComplement = false,
+    this.bitIndex = -1,
+    this.unit = '',
+  });
+
+  factory EcuParameter.fromJson(Map<String, dynamic> json) {
+    return EcuParameter(
+      id: json['id'] as String,
+      name: json['name'] as String,
+      byteOffset: json['byteOffset'] as int,
+      width: json['width'] as int? ?? 1,
+      multiplier: (json['multiplier'] as num?)?.toDouble() ?? 1.0,
+      divisor: (json['divisor'] as num?)?.toDouble() ?? 1.0,
+      offset: (json['offset'] as num?)?.toDouble() ?? 0.0,
+      decimals: json['decimals'] as int? ?? 0,
+      signedComplement: json['signedComplement'] as bool? ?? false,
+      bitIndex: json['bitIndex'] as int? ?? -1,
+      unit: json['unit'] as String? ?? '',
+    );
+  }
+
+  /// Метод декодирования сырых байт в готовое значение
+  double? decode(List<int> payload) {
+    // Защита от выхода за пределы массива
+    if (byteOffset < 0 || byteOffset + width > payload.length) return null;
+
+    int raw = 0;
+    // Собираем число из байтов (Big Endian)
+    for (int i = 0; i < width; i++) {
+      raw = (raw << 8) | payload[byteOffset + i];
+    }
+
+    // Если это битовый флаг
+    if (bitIndex >= 0) {
+      return ((raw >> bitIndex) & 1).toDouble();
+    }
+
+    // Обработка отрицательных чисел (Дополнительный код / Two's complement)
+    if (signedComplement) {
+      final signBit = 1 << (width * 8 - 1);
+      if ((raw & signBit) != 0) {
+        raw -= (1 << (width * 8));
+      }
+    }
+
+    // Применяем формулу
+    double v = (raw * multiplier / divisor) + offset;
+    
+    // Округляем до нужного количества знаков
+    if (decimals > 0) {
+      final factor = math.pow(10, decimals);
+      v = (v * factor).roundToDouble() / factor;
+    } else {
+      v = v.roundToDouble();
+    }
+    
+    // Избегаем "-0.0"
+    return v == 0 ? 0.0 : v;
+  }
+}
+
+// ===== END OF FILE =====
+
+// ===== FILE: lib/data/models/ecu_profile.dart =====
+import 'ecu_parameter.dart';
+
+class EcuRequestBlock {
+  final String name;       // Название пакета (например, "Основные параметры")
+  final String kwpCommand; // Команда для KWP2000 (например, "2101")
+  final String udsCommand; // Команда для UDS (например, "222001")
+  final List<EcuParameter> parameters;
+
+  EcuRequestBlock({
+    required this.name,
+    required this.kwpCommand,
+    required this.udsCommand,
+    required this.parameters,
+  });
+
+  factory EcuRequestBlock.fromJson(Map<String, dynamic> json) {
+    return EcuRequestBlock(
+      name: json['name'] as String,
+      kwpCommand: json['kwpCommand'] as String,
+      udsCommand: json['udsCommand'] as String,
+      parameters: (json['parameters'] as List)
+          .map((p) => EcuParameter.fromJson(p as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+}
+
+class EcuProfile {
+  final String id;
+  final String name;
+  final List<EcuRequestBlock> blocks;
+
+  EcuProfile({
+    required this.id,
+    required this.name,
+    required this.blocks,
+  });
+
+  factory EcuProfile.fromJson(Map<String, dynamic> json) {
+    return EcuProfile(
+      id: json['id'] as String,
+      name: json['name'] as String,
+      blocks: (json['blocks'] as List)
+          .map((b) => EcuRequestBlock.fromJson(b as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+}
+
+// ===== END OF FILE =====
+
+// ===== FILE: lib/data/models/nuance_event.dart =====
+enum NuanceSeverity { info, warning, critical }
+
+class NuanceEvent {
+  final String id;
+  DateTime timestamp;
+  NuanceSeverity severity;
+  String title;
+  String description;
+  Map<String, String> snapshot;
+  int hzCount;
+
+  NuanceEvent({
+    required this.id,
+    required this.timestamp,
+    required this.severity,
+    required this.title,
+    required this.description,
+    required this.snapshot,
+    this.hzCount = 1,
+  });
+
+  String get timeStr =>
+      "${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}:${timestamp.second.toString().padLeft(2, '0')}";
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'ts': timestamp.toIso8601String(),
+        'sev': severity.name,
+        'title': title,
+        'desc': description,
+        'snap': snapshot,
+        'hz': hzCount,
+      };
+
+  factory NuanceEvent.fromJson(Map<String, dynamic> j) {
+    final sevName = (j['sev'] ?? 'info').toString();
+    final sev = NuanceSeverity.values.firstWhere(
+      (e) => e.name == sevName,
+      orElse: () => NuanceSeverity.info,
+    );
+    final rawSnap = j['snap'] as Map<String, dynamic>? ?? {};
+    return NuanceEvent(
+      id: (j['id'] ?? '').toString(),
+      timestamp: DateTime.tryParse((j['ts'] ?? '').toString()) ?? DateTime.now(),
+      severity: sev,
+      title: (j['title'] ?? '').toString(),
+      description: (j['desc'] ?? '').toString(),
+      snapshot: rawSnap.map((k, v) => MapEntry(k, v.toString())),
+      hzCount: (j['hz'] as num?)?.toInt() ?? 1,
+    );
+  }
+}
+
+class TrimBin {
+  final String label;
+  final List<double> _samples = [];
+  TrimBin(this.label);
+
+  int get count => _samples.length;
+  bool get isNotEmpty => _samples.isNotEmpty;
+  List<double> get rawSamples => List.unmodifiable(_samples);
+
+  void loadSamples(List<double> saved) {
+    _samples..clear()..addAll(saved.take(90));
+  }
+
+  void addSample(double stft, double ltft) {
+    if (stft.abs() > 30.0 || ltft.abs() > 30.0) return;
+    _samples.add(stft + ltft);
+    if (_samples.length > 90) _samples.removeAt(0);
+  }
+
+  double get median {
+    if (_samples.isEmpty) return 0.0;
+    final sorted = List<double>.from(_samples)..sort();
+    final mid = sorted.length ~/ 2;
+    return sorted.length.isOdd ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2.0;
+  }
+
+  void clear() => _samples.clear();
+}
+
+// ===== END OF FILE =====
+
+// ===== FILE: lib/data/models/vehicle_profile.dart =====
+class VehicleProfile {
+  final String id;
+  final String brand;
+  final String model;
+  final String engine;
+  final String ecuProfileId; // Имя файла JSON без расширения (например, "m86_uds")
+
+  VehicleProfile({
+    required this.id,
+    required this.brand,
+    required this.model,
+    required this.engine,
+    required this.ecuProfileId,
+  });
+
+  factory VehicleProfile.fromJson(Map<String, dynamic> json) {
+    return VehicleProfile(
+      id: json['id'] as String,
+      brand: json['brand'] as String,
+      model: json['model'] as String,
+      engine: json['engine'] as String,
+      ecuProfileId: json['ecuProfileId'] as String,
+    );
+  }
+}
+// ===== END OF FILE =====
+
+// ===== FILE: lib/features/dashboard/dashboard_screen.dart =====
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/services.dart';
+import '../../providers/obd_provider.dart';
+import '../../services/trip_calculator.dart';
+import '../../core/theme.dart';
+import '../../services/ota_service.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+class DashboardScreen extends ConsumerStatefulWidget {
+  const DashboardScreen({super.key});
+
+  @override
+  ConsumerState<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends ConsumerState<DashboardScreen> {
+  Future<void> _checkOta() async {
+    // Показываем загрузку
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Проверка обновлений на GitHub...'), duration: Duration(seconds: 2)),
+    );
+
+    final result = await OtaService.checkForUpdates();
+
+    if (!mounted) return;
+
+    if (result == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Не удалось проверить обновления (нет сети)'), backgroundColor: AppColors.error),
+      );
+      return;
+    }
+
+    if (result['hasUpdate'] == true) {
+      // Есть новая версия — показываем шторку
+      showModalBottomSheet(
+        context: context,
+        backgroundColor: AppColors.darkSurface,
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+        builder: (ctx) => Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.system_update_rounded, color: AppColors.darkAccent, size: 28),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text('Доступно обновление ${result['latestVersion']}', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold))),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Text(result['releaseNotes'], style: const TextStyle(color: Colors.grey, fontSize: 13, height: 1.4)),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.success,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    final uri = Uri.parse(result['apkUrl']);
+                    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+                      await Clipboard.setData(ClipboardData(text: result['apkUrl']));
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Ссылка скопирована в буфер')));
+                    }
+                  },
+                  icon: const Icon(Icons.download_rounded, color: Colors.white),
+                  label: const Text('Скачать и установить', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    } else {
+      // Обновлений нет
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('У вас установлена последняя версия (${OtaService.currentVersion})'), backgroundColor: AppColors.success),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final obdState = ref.watch(obdProvider);
+    final obdNotifier = ref.read(obdProvider.notifier);
+    final tripCalc = obdNotifier.tripCalculator;
+
+    final liveData = obdState.liveData;
+    final rpm = liveData['rpm']?.toInt();
+    final ect = liveData['ect']?.toInt();
+    final speed = liveData['speed']?.toInt();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Row(
+          children: [
+            const Text('VestaScan', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 20)),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppColors.darkAccentSoft,
+                borderRadius: BorderRadius.circular(5),
+                border: Border.all(color: AppColors.darkAccent.withAlpha(80)),
+              ),
+              child: const Text('v3.2', style: TextStyle(fontSize: 9, color: AppColors.darkAccent, fontWeight: FontWeight.w800)),
+            ),
+          ],
+        ),
+        actions: [
+          // КНОПКА OTA
+          IconButton(
+            icon: const Icon(Icons.cloud_download_outlined, color: AppColors.darkAccent),
+            tooltip: 'Проверить обновления',
+            onPressed: () => _checkOta(),
+          ),
+          IconButton(
+            icon: const Icon(Icons.radar_rounded, color: AppColors.darkAccent),
+            onPressed: () => _runSniffer(),
+          ),
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppColors.darkSurface2,
+              borderRadius: BorderRadius.circular(7),
+              border: Border.all(color: AppColors.darkBorder),
+            ),
+            child: const Center(
+              child: Text('М86 UDS', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, fontFamily: 'monospace', color: AppColors.darkText2)),
+            ),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 90),
+          children: [
+            _buildTripComputerCard(tripCalc, obdNotifier),
+            
+            const SizedBox(height: 16),
+            _sectionTitle('ТЕЛЕМЕТРИЯ', 'LIVE'),
+            
+            GridView.count(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              crossAxisCount: 2,
+              crossAxisSpacing: 10,
+              mainAxisSpacing: 10,
+              childAspectRatio: 1.55,
+              children: [
+                _buildSensorCard('ОБОРОТЫ ХХ', '${rpm ?? "---"}', 'об/мин', 'Норма: 840 ± 40', _statusRpm(rpm)),
+                _buildSensorCard('ТЕМП. ОЖ', '${ect ?? "---"}', '°C', 'Норма: 90–103 °C', _statusEct(ect)),
+                _buildSensorCard('СКОРОСТЬ', '${speed ?? "---"}', 'км/ч', 'Движение', speed != null && speed > 0 ? 'good' : 'normal'),
+                _buildSensorCard('STFT', liveData['stft']?.toStringAsFixed(1) ?? '---', '%', 'Допуск: ±15%', _statusTrim(liveData['stft'])),
+                _buildSensorCard('LTFT', liveData['ltft']?.toStringAsFixed(1) ?? '---', '%', 'Допуск: ±15%', _statusTrim(liveData['ltft'])),
+                _buildSensorCard('ДПДЗ', liveData['tps']?.toStringAsFixed(1) ?? '---', '%', 'Норма ХХ: 1–4%', 'normal'),
+                _buildSensorCard('ДАД', liveData['map']?.toStringAsFixed(0) ?? '---', 'кПа', 'Норма ХХ: 28–41', 'normal'),
+                _buildSensorCard('БОРТСЕТЬ', '14.10', 'В', 'Норма: 13,0–14,5 В', 'good'),
+              ],
+            ),
+
+            const SizedBox(height: 20),
+            _sectionTitle('КАРТА КОРРЕКЦИЙ', 'медиана зон'),
+            _buildMatrixCard(obdState.trimMedians),
+
+            const SizedBox(height: 20),
+            _sectionTitle('ОСЦИЛЛОГРАФ УДК/ДДК', '0–1.8 В'),
+            _buildOscilloscope(obdState.trace1),
+          ],
+        ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        backgroundColor: obdState.isPolling ? AppColors.error : AppColors.darkAccent,
+        onPressed: () async {
+          if (obdState.isPolling) {
+            obdNotifier.stopPolling();
+          } else {
+            final devices = await obdNotifier.getBluetoothDevices();
+            if (devices.isEmpty) {
+              if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Нет спаренных устройств')));
+              return;
+            }
+            if (!mounted) return;
+            showDialog(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                backgroundColor: AppColors.darkSurface,
+                title: const Text('Выберите ELM327', style: TextStyle(color: Colors.white)),
+                content: SizedBox(
+                  width: double.maxFinite,
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: devices.length,
+                    itemBuilder: (c, i) {
+                      final d = devices[i];
+                      return ListTile(
+                        title: Text(d['name'] ?? 'Unknown', style: const TextStyle(color: Colors.white)),
+                        subtitle: Text(d['address'] ?? '', style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          obdNotifier.connect(d['address']!).then((s) {
+                            if (s) obdNotifier.startPolling();
+                          });
+                        },
+                      );
+                    },
+                  ),
+                ),
+              ),
+            );
+          }
+        },
+        child: Icon(obdState.isPolling ? Icons.stop : Icons.play_arrow, color: Colors.black, size: 32),
+      ),
+    );
+  }
+
+  String _statusRpm(int? rpm) => (rpm != null && (rpm < 780 || rpm > 900)) ? 'warn' : 'good';
+  String _statusEct(int? ect) => (ect != null && ect > 103) ? 'err' : (ect != null && ect < 87 ? 'warn' : 'good');
+  String _statusTrim(double? val) => (val != null && val.abs() > 15) ? 'err' : (val != null && val.abs() > 8 ? 'warn' : 'good');
+
+  Widget _sectionTitle(String title, String hint) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10, top: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(title, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.9, color: AppColors.darkText3)),
+          Text(hint, style: const TextStyle(fontSize: 10, color: AppColors.darkText3, fontFamily: 'monospace')),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSensorCard(String label, String value, String unit, String norm, String status) {
+    final borderColor = status == 'err' ? AppColors.error : (status == 'warn' ? AppColors.warning : AppColors.success);
+    final valueColor = status == 'err' ? AppColors.error : (status == 'warn' ? AppColors.warning : AppColors.darkText1);
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.darkSurface,
+        borderRadius: BorderRadius.circular(12),
+        border: Border(
+          left: BorderSide(color: borderColor, width: 3),
+          top: const BorderSide(color: AppColors.darkBorder),
+          right: const BorderSide(color: AppColors.darkBorder),
+          bottom: const BorderSide(color: AppColors.darkBorder),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 9.5, fontWeight: FontWeight.w800, color: AppColors.darkText2)),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, fontFamily: 'monospace', color: valueColor)),
+              const SizedBox(width: 3),
+              Text(unit, style: const TextStyle(fontSize: 11, color: AppColors.darkText3)),
+            ],
+          ),
+          Container(
+            padding: const EdgeInsets.only(top: 4),
+            decoration: const BoxDecoration(border: Border(top: BorderSide(color: AppColors.darkBorder, width: 0.5))),
+            child: Text(norm, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 9.5, color: AppColors.darkText3)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTripComputerCard(TripCalculator calc, ObdNotifier notifier) {
+    final isMoving = calc.totalDistanceKm > 0.05;
+    final instantStr = isMoving ? '${calc.instantFuelL100Km.toStringAsFixed(1)} л/100' : '${calc.instantFuelLpH.toStringAsFixed(2)} л/ч';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(color: AppColors.darkSurface, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.darkBorder)),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(color: AppColors.darkAccentSoft, borderRadius: BorderRadius.circular(10)),
+            child: const Icon(Icons.local_gas_station_rounded, color: AppColors.darkAccent, size: 20),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _tripItem('ПРОБЕГ', '${calc.totalDistanceKm.toStringAsFixed(1)}', 'км'),
+                Container(width: 1, height: 24, color: AppColors.darkBorder),
+                _tripItem('СРЕДНИЙ', '${calc.averageConsumptionL100Km.toStringAsFixed(1)}', 'л/100'),
+                Container(width: 1, height: 24, color: AppColors.darkBorder),
+                _tripItem('МГНОВ.', instantStr.split(' ')[0], instantStr.split(' ')[1]),
+              ],
+            ),
+          ),
+          IconButton(icon: const Icon(Icons.restart_alt, size: 18, color: AppColors.darkText3), onPressed: () => notifier.resetTrip()),
+        ],
+      ),
+    );
+  }
+
+  Widget _tripItem(String label, String value, String unit) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppColors.darkText3)),
+        const SizedBox(height: 2),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, fontFamily: 'monospace', color: AppColors.darkText1)),
+            const SizedBox(width: 2),
+            Text(unit, style: const TextStyle(fontSize: 9, color: AppColors.darkText3)),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildMatrixCard(Map<String, double> medians) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(color: AppColors.darkSurface, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.darkBorder)),
+      child: Row(
+        children: [
+          _buildTrimBox('ХХ', medians['idle']),
+          _buildTrimBox('МАЛЫЕ', medians['low']),
+          _buildTrimBox('ЧАСТ.', medians['part']),
+          _buildTrimBox('ВЫСОК.', medians['high']),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTrimBox(String label, double? val) {
+    final hasData = val != null && val != 0.0;
+    final color = !hasData ? AppColors.darkText3 : (val.abs() > 12.0 ? AppColors.error : (val.abs() > 6.5 ? AppColors.warning : AppColors.success));
+
+    return Expanded(
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 3),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: AppColors.darkSurface2,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: hasData ? color.withAlpha(80) : AppColors.darkBorder),
+        ),
+        child: Column(
+          children: [
+            Text(label, style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppColors.darkText3)),
+            const SizedBox(height: 4),
+            Text(
+              hasData ? '${val >= 0 ? "+" : ""}${val.toStringAsFixed(1)}%' : '---',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, fontFamily: 'monospace', color: color),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildOscilloscope(List<double> trace) {
+    return Container(
+      height: 170,
+      decoration: BoxDecoration(color: AppColors.darkScopeBg, borderRadius: BorderRadius.circular(16), border: Border.all(color: AppColors.darkBorder)),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        child: trace.isEmpty
+            ? const Center(child: Text('Ожидание данных...', style: TextStyle(color: AppColors.darkText3, fontSize: 12)))
+            : CustomPaint(painter: _ScopePainter(trace: trace), size: Size.infinite),
+      ),
+    );
+  }
+
+  Future<void> _runSniffer() async {
+    final obdNotifier = ref.read(obdProvider.notifier);
+    if (!ref.read(obdProvider).isConnected) return;
+    showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
+    final dump = await obdNotifier.runSnifferDump();
+    if (!mounted) return;
+    Navigator.pop(context);
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.darkSurface,
+        title: const Text('Сниффер ЭБУ', style: TextStyle(color: Colors.white)),
+        content: SingleChildScrollView(child: SelectableText(dump, style: const TextStyle(fontFamily: 'monospace', fontSize: 11, color: Colors.grey))),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: dump));
+              Navigator.pop(ctx);
+            },
+            child: const Text('Копировать'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ScopePainter extends CustomPainter {
+  final List<double> trace;
+  _ScopePainter({required this.trace});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    const maxScaleV = 1.8;
+    final height = size.height;
+
+    void drawBand(double v1, double v2, Color color) {
+      final y1 = height - (v1 / maxScaleV) * height;
+      final y2 = height - (v2 / maxScaleV) * height;
+      canvas.drawRect(Rect.fromLTRB(0, y2, size.width, y1), Paint()..color = color);
+    }
+    drawBand(0.18, 0.95, AppColors.bandUdk);
+    drawBand(0.59, 0.75, AppColors.bandDdk);
+    drawBand(1.20, 1.70, AppColors.bandRef);
+
+    final gridPaint = Paint()..color = AppColors.darkScopeGrid..strokeWidth = 1;
+    for (int i = 1; i < 4; i++) {
+      final y = height * (i / 4);
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+
+    if (trace.length < 2) return;
+    final paint = Paint()..color = AppColors.darkTrace1..strokeWidth = 2..style = PaintingStyle.stroke;
+    final path = Path();
+    final stepX = size.width / 100;
+
+    for (int i = 0; i < trace.length; i++) {
+      final x = i * stepX;
+      final y = height - ((trace[i] / maxScaleV).clamp(0.0, 1.0) * height);
+      if (i == 0) path.moveTo(x, y);
+      else path.lineTo(x, y);
+    }
+    canvas.drawPath(path, paint);
+  }
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+}
+
+// ===== END OF FILE =====
+
+// ===== FILE: lib/features/dashboard/widgets/oscilloscope.dart =====
+import 'package:flutter/material.dart';
+import 'dart:collection';
+
+class Oscilloscope extends StatelessWidget {
+  final Queue<double> trace1;
+  final Queue<double>? trace2;
+  final double minValue;
+  final double maxValue;
+  final Color color1;
+  final Color? color2;
+
+  const Oscilloscope({
+    super.key,
+    required this.trace1,
+    this.trace2,
+    required this.minValue,
+    required this.maxValue,
+    required this.color1,
+    this.color2,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 180,
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: const Color(0xFF10151D), // darkScopeBg из нашей темы
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Theme.of(context).dividerColor),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(16),
+        // RepaintBoundary спасает батарею, изолируя перерисовку
+        child: RepaintBoundary(
+          child: CustomPaint(
+            painter: _ScopePainter(
+              trace1: trace1.toList(),
+              trace2: trace2?.toList(),
+              minVal: minValue,
+              maxVal: maxValue,
+              color1: color1,
+              color2: color2 ?? Colors.transparent,
+              gridColor: const Color(0xFF243040),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ScopePainter extends CustomPainter {
+  final List<double> trace1;
+  final List<double>? trace2;
+  final double minVal;
+  final double maxVal;
+  final Color color1;
+  final Color color2;
+  final Color gridColor;
+
+  _ScopePainter({
+    required this.trace1,
+    this.trace2,
+    required this.minVal,
+    required this.maxVal,
+    required this.color1,
+    required this.color2,
+    required this.gridColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // 1. Отрисовка фоновой сетки (Grid)
+    final gridPaint = Paint()
+      ..color = gridColor
+      ..strokeWidth = 1.0;
+    
+    // Горизонтальные линии
+    for (int i = 1; i < 4; i++) {
+      final y = size.height * (i / 4);
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+    }
+    // Вертикальные линии
+    for (int i = 1; i < 6; i++) {
+      final x = size.width * (i / 6);
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
+    }
+
+    // 2. Логика отрисовки самой кривой
+    void drawTrace(List<double> trace, Color color) {
+      if (trace.isEmpty) return;
+      final paint = Paint()
+        ..color = color
+        ..strokeWidth = 2.0
+        ..style = PaintingStyle.stroke
+        ..strokeJoin = StrokeJoin.round;
+
+      final path = Path();
+      // Выделяем ширину шага, предполагая, что на экране хранится до 100 точек
+      final stepX = size.width / 99; 
+      final range = maxVal - minVal;
+      if (range == 0) return;
+
+      for (int i = 0; i < trace.length; i++) {
+        final x = i * stepX;
+        // Нормализация (от 0.0 до 1.0) и инверсия (ось Y во Flutter идет сверху вниз)
+        double normalizedY = (trace[i] - minVal) / range;
+        normalizedY = normalizedY.clamp(0.0, 1.0);
+        final y = size.height - (normalizedY * size.height);
+
+        if (i == 0) {
+          path.moveTo(x, y);
+        } else {
+          path.lineTo(x, y);
+        }
+      }
+      canvas.drawPath(path, paint);
+    }
+
+    // Рисуем графики
+    drawTrace(trace1, color1);
+    if (trace2 != null) {
+      drawTrace(trace2!, color2);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _ScopePainter oldDelegate) => true; 
+}
+// ===== END OF FILE =====
+
+// ===== FILE: lib/features/dashboard/widgets/trip_panel.dart =====
+import 'package:flutter/material.dart';
+import '../../../services/trip_calculator.dart';
+
+class TripPanel extends StatelessWidget {
+  final TripCalculator calculator;
+  final VoidCallback onReset;
+
+  const TripPanel({
+    super.key,
+    required this.calculator,
+    required this.onReset,
+  });
+
+  void _showDetailsSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Статистика поездки', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 16),
+              _buildDetailRow(context, 'Потрачено топлива:', '${calculator.totalFuelLiters.toStringAsFixed(2)} л'),
+              _buildDetailRow(context, 'Максимальная скорость:', '${calculator.maxSpeedKmh.toStringAsFixed(1)} км/ч'),
+              _buildDetailRow(context, 'Средний расход:', '${calculator.averageConsumptionL100Km.toStringAsFixed(1)} л/100км'),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Theme.of(context).colorScheme.primary,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () {
+                    onReset();
+                    Navigator.pop(context);
+                  },
+                  child: const Text('Сбросить поездку', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                ),
+              )
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildDetailRow(BuildContext context, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: Theme.of(context).textTheme.bodyMedium),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.bold, fontFamily: 'JetBrains Mono')),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => _showDetailsSheet(context),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Theme.of(context).dividerColor),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withAlpha(13), // ~0.05 opacity
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            )
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _buildStatBlock(context, Icons.route, '${calculator.totalDistanceKm.toStringAsFixed(1)} км'),
+            Container(width: 1, height: 24, color: Theme.of(context).dividerColor),
+            _buildStatBlock(context, Icons.local_gas_station, '${calculator.averageConsumptionL100Km.toStringAsFixed(1)} л'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatBlock(BuildContext context, IconData icon, String value) {
+    return Row(
+      children: [
+        Icon(icon, size: 20, color: Theme.of(context).colorScheme.primary),
+        const SizedBox(width: 8),
+        Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, fontFamily: 'JetBrains Mono')),
+      ],
+    );
+  }
+}
+// ===== END OF FILE =====
+
+// ===== FILE: lib/features/dtc/dtc_screen.dart =====
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../providers/obd_provider.dart';
+import '../../core/theme.dart';
+
+class DtcScreen extends ConsumerStatefulWidget {
+  const DtcScreen({super.key});
+
+  @override
+  ConsumerState<DtcScreen> createState() => _DtcScreenState();
+}
+
+class _DtcScreenState extends ConsumerState<DtcScreen> {
+  bool _isLoading = false;
+  bool _hasScanned = false;
+  List<String> _dtcs = []; // Теперь храним просто строки кодов
+  Map<String, String> _freezeFrameData = {};
+
+  void _scanDtc() async {
+    final obdNotifier = ref.read(obdProvider.notifier);
+    if (!ref.read(obdProvider).isConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Сначала подключитесь к автомобилю!'), backgroundColor: AppColors.error),
+      );
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    // Вызываем реальный опрос ЭБУ
+    final codes = await obdNotifier.readDtcs();
+
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+        _hasScanned = true;
+        _dtcs = codes;
+      });
+    }
+  }
+
+  void _clearDtc() async {
+    final obdNotifier = ref.read(obdProvider.notifier);
+    setState(() => _isLoading = true);
+    
+    // Отправляем команду стирания (04 для OBD2, 14FFFFFF для UDS)
+    await obdNotifier.clearDtcs();
+
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+        _dtcs = [];
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Коды ошибок успешно стерты!'), backgroundColor: AppColors.success),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Коды неисправностей', style: TextStyle(fontWeight: FontWeight.w800))),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.darkSurface,
+                      foregroundColor: AppColors.darkAccent,
+                      side: const BorderSide(color: AppColors.darkAccent),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                    onPressed: _isLoading ? null : _scanDtc,
+                    icon: _isLoading ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)) : const Icon(Icons.search),
+                    label: const Text('ПРОЧИТАТЬ', style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.error.withAlpha(25),
+                      foregroundColor: AppColors.error,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                    ),
+                    onPressed: (_isLoading || _dtcs.isEmpty) ? null : _clearDtc,
+                    icon: const Icon(Icons.delete_forever),
+                    label: const Text('СБРОСИТЬ', style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            Expanded(
+              child: !_hasScanned 
+                  ? const Center(child: Text('Нажмите "Прочитать", чтобы опросить ЭБУ', style: TextStyle(color: Colors.grey)))
+                  : _dtcs.isEmpty
+                      ? const Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.check_circle_outline, color: AppColors.success, size: 64),
+                              SizedBox(height: 16),
+                              Text('Ошибок не обнаружено', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                            ],
+                          ),
+                        )
+                      : ListView.builder(
+                          itemCount: _dtcs.length,
+                          itemBuilder: (context, index) {
+                            final code = _dtcs[index];
+                            return Card(
+                              margin: const EdgeInsets.only(bottom: 12),
+                              color: AppColors.darkSurface,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                side: const BorderSide(color: AppColors.error),
+                              ),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(12),
+                                onTap: () => _showFreezeFrame(code),
+                                child: ListTile(
+                                  leading: const Icon(Icons.warning_amber_rounded, color: AppColors.error),
+                                  title: Text(code, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, fontFamily: 'monospace', color: AppColors.error)),
+                                  subtitle: const Text('Нажмите для просмотра стоп-кадра', style: TextStyle(color: Colors.grey, fontSize: 12)),
+                                  trailing: const Icon(Icons.chevron_right, color: Colors.grey),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showFreezeFrame(String code) async {
+    final obdNotifier = ref.read(obdProvider.notifier);
+    
+    // Показываем шторку с загрузкой
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppColors.darkSurface,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setSheetState) {
+            // Запускаем чтение один раз
+            if (!_isLoading && _dtcs.isNotEmpty) {
+              Future.microtask(() async {
+                final data = await obdNotifier.getFreezeFrame(code);
+                if (mounted) {
+                  setSheetState(() {
+                    _freezeFrameData = data;
+                  });
+                }
+              });
+            }
+
+            return Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(color: AppColors.errorSoft, borderRadius: BorderRadius.circular(8)),
+                        child: Text(code, style: const TextStyle(color: AppColors.error, fontWeight: FontWeight.bold, fontSize: 16)),
+                      ),
+                      const SizedBox(width: 12),
+                      const Expanded(child: Text('Стоп-кадр', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold))),
+                      if (_freezeFrameData.isEmpty) const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  if (_freezeFrameData.isEmpty)
+                    const Text('Запрос данных у ЭБУ...', style: TextStyle(color: Colors.grey))
+                  else
+                    ..._freezeFrameData.entries.map((e) => Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(e.key, style: const TextStyle(color: Colors.grey, fontSize: 14)),
+                          Text(e.value, style: const TextStyle(color: AppColors.darkAccent, fontWeight: FontWeight.bold, fontSize: 14, fontFamily: 'monospace')),
+                        ],
+                      ),
+                    )),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(backgroundColor: AppColors.darkSurface2),
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Закрыть', style: TextStyle(color: Colors.white)),
+                    ),
+                  )
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+// ===== END OF FILE =====
+
+// ===== FILE: lib/features/journal/journal_screen.dart =====
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../providers/obd_provider.dart';
+import '../../data/models/nuance_event.dart';
+import '../../core/theme.dart';
+
+class JournalScreen extends ConsumerStatefulWidget {
+  const JournalScreen({super.key});
+
+  @override
+  ConsumerState<JournalScreen> createState() => _JournalScreenState();
+}
+
+class _JournalScreenState extends ConsumerState<JournalScreen> {
+  bool _isExporting = false;
+
+  Future<void> _exportCsv() async {
+    final obdNotifier = ref.read(obdProvider.notifier);
+    setState(() => _isExporting = true);
+    
+    final result = await obdNotifier.exportJournalToCsv();
+    
+    if (!mounted) return;
+    setState(() => _isExporting = false);
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(result),
+        backgroundColor: result.startsWith('✅') ? AppColors.success : AppColors.warning,
+        duration: const Duration(seconds: 5),
+      ),
+    );
+  }
+
+  void _clearJournal() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.darkSurface,
+        title: const Text('Очистить журнал?', style: TextStyle(color: Colors.white)),
+        content: const Text('Все события будут удалены из памяти. Это действие нельзя отменить.', style: TextStyle(color: Colors.grey)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.error),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Очистить', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    
+    if (confirmed == true) {
+      ref.read(obdProvider.notifier).clearJournal();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = ref.watch(obdProvider);
+    final nuances = state.nuances;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Журнал событий (${nuances.length})', style: const TextStyle(fontWeight: FontWeight.w800)),
+        actions: [
+          IconButton(
+            icon: _isExporting 
+                ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.darkAccent))
+                : const Icon(Icons.save_alt_rounded, color: AppColors.darkAccent),
+            tooltip: 'Экспорт в CSV',
+            onPressed: _isExporting ? null : _exportCsv,
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline, color: Colors.grey),
+            tooltip: 'Очистить журнал',
+            onPressed: _clearJournal,
+          ),
+        ],
+      ),
+      body: nuances.isEmpty
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(32),
+                child: Text(
+                  'Журнал чист.\nАномалии будут автоматически регистрироваться здесь с счетчиком HZ.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey, fontSize: 14, height: 1.5),
+                ),
+              ),
+            )
+          : ListView.builder(
+              padding: const EdgeInsets.all(16),
+              itemCount: nuances.length,
+              itemBuilder: (ctx, i) {
+                final e = nuances[i];
+                final color = e.severity == NuanceSeverity.critical 
+                    ? AppColors.error
+                    : (e.severity == NuanceSeverity.warning 
+                        ? AppColors.warning 
+                        : AppColors.darkAccent);
+                
+                return Card(
+                  color: AppColors.darkSurface,
+                  margin: const EdgeInsets.only(bottom: 10),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: BorderSide(color: color.withAlpha(80)),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(
+                              e.severity == NuanceSeverity.critical 
+                                  ? Icons.error_outline 
+                                  : Icons.warning_amber_rounded,
+                              color: color,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                e.title,
+                                style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 14),
+                              ),
+                            ),
+                            if (e.hzCount > 1)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(color: color.withAlpha(40), borderRadius: BorderRadius.circular(6)),
+                                child: Text('HZ: ${e.hzCount}', style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(e.description, style: const TextStyle(color: Colors.grey, fontSize: 12, height: 1.4)),
+                        if (e.snapshot.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: e.snapshot.entries.map((entry) {
+                              return Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                                decoration: BoxDecoration(color: AppColors.darkSurface2, borderRadius: BorderRadius.circular(6)),
+                                child: Text(
+                                  '${entry.key}: ${entry.value}',
+                                  style: const TextStyle(color: AppColors.darkText2, fontSize: 10, fontWeight: FontWeight.w700),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        ],
+                        const SizedBox(height: 8),
+                        Text(e.timeStr, style: const TextStyle(color: AppColors.darkText3, fontSize: 10, fontFamily: 'monospace')),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}
+// ===== END OF FILE =====
+
+// ===== FILE: lib/features/tests/tests_screen.dart =====
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../providers/obd_provider.dart';
+import '../../core/theme.dart';
+
+class TestsScreen extends ConsumerStatefulWidget {
+  const TestsScreen({super.key});
+
+  @override
+  ConsumerState<TestsScreen> createState() => _TestsScreenState();
+}
+
+class _TestsScreenState extends ConsumerState<TestsScreen> {
+  bool _isTestRunning = false;
+  String _adaptStatus = 'Готов к адаптации';
+
+  Future<void> _runAdaptation() async {
+    final obdNotifier = ref.read(obdProvider.notifier);
+    if (!ref.read(obdProvider).isConnected) return;
+
+    setState(() {
+      _isTestRunning = true;
+      _adaptStatus = 'Запуск...';
+    });
+
+    final result = await obdNotifier.runThrottleAdaptation((msg) {
+      if (mounted) setState(() => _adaptStatus = msg);
+    });
+
+    if (mounted) {
+      setState(() {
+        _isTestRunning = false;
+        _adaptStatus = result;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Активные тесты', style: TextStyle(fontWeight: FontWeight.w800))),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _buildTestCard(
+            title: 'Адаптация нуля ДЗ',
+            subtitle: '30 секунд покоя + 10 сек главное реле',
+            icon: Icons.timer_outlined,
+            onTap: _isTestRunning ? () {} : _runAdaptation,
+            isDanger: true,
+          ),
+          if (_adaptStatus != 'Готов к адаптации')
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(_adaptStatus, style: const TextStyle(color: AppColors.darkAccent, fontWeight: FontWeight.bold)),
+            ),
+          const Divider(color: AppColors.darkBorder),
+          _buildTestCard(
+            title: 'Вентилятор 1 (Малая)',
+            subtitle: 'Конт. X1.1/H2 (6 сек)',
+            icon: Icons.wind_power_rounded,
+            onTap: () => _runTest('Вентилятор 1', '2F02010301', '2F020100', 6),
+          ),
+          _buildTestCard(
+            title: 'Вентилятор 2 (Макс.)',
+            subtitle: 'Конт. X1.1/H3 (6 сек)',
+            icon: Icons.cyclone_rounded,
+            onTap: () => _runTest('Вентилятор 2', '2F02020301', '2F020200', 6),
+            isDanger: true,
+          ),
+          _buildTestCard(
+            title: 'Реле бензонасоса',
+            subtitle: 'Конт. X1.1/J4 (10 сек)',
+            icon: Icons.local_gas_station_rounded,
+            onTap: () => _runTest('Реле ЭБН', '2F02030301', '2F020300', 10, requireEngineStopped: true),
+            isDanger: true,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _runTest(String title, String cmdOn, String cmdOff, int holdSec, {bool requireEngineStopped = false}) async {
+    final obdNotifier = ref.read(obdProvider.notifier);
+    setState(() => _isTestRunning = true);
+    try {
+      await obdNotifier.runActuatorTest(
+        testName: title,
+        cmdOn: cmdOn,
+        cmdOff: cmdOff,
+        holdSeconds: holdSec,
+        requireEngineStopped: requireEngineStopped,
+      );
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Ошибка: $e')));
+    } finally {
+      if (mounted) setState(() => _isTestRunning = false);
+    }
+  }
+
+  Widget _buildTestCard({required String title, required String subtitle, required IconData icon, required VoidCallback onTap, bool isDanger = false}) {
+    return Card(
+      color: AppColors.darkSurface,
+      margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: isDanger ? AppColors.error.withAlpha(100) : AppColors.darkBorder)),
+      child: ListTile(
+        onTap: _isTestRunning ? null : onTap,
+        leading: Icon(icon, color: isDanger ? AppColors.error : AppColors.darkAccent),
+        title: Text(title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        subtitle: Text(subtitle, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+        trailing: const Icon(Icons.play_circle_fill, color: AppColors.darkAccent),
+      ),
+    );
+  }
+}
+
+// ===== END OF FILE =====
+
+// ===== FILE: lib/main.dart =====
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'core/theme.dart';
+import 'main_screen.dart';
+
+void main() {
+  runApp(
+    // Обязательная обертка для Riverpod
+    const ProviderScope(
+      child: VestaScanApp(),
+    ),
+  );
+}
+
+class VestaScanApp extends StatelessWidget {
+  const VestaScanApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'VestaScan Pro',
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.darkTheme, // Используем нашу новую темную тему
+      home: const MainScreen(), // Открываем главный экран с вкладками
+    );
+  }
+}
+// ===== END OF FILE =====
+
+// ===== FILE: lib/main_screen.dart =====
+import 'package:flutter/material.dart';
+import 'features/dashboard/dashboard_screen.dart';
+import 'features/tests/tests_screen.dart';
+import 'features/journal/journal_screen.dart';
+import 'features/dtc/dtc_screen.dart';
+
+class MainScreen extends StatefulWidget {
+  const MainScreen({super.key});
+
+  @override
+  State<MainScreen> createState() => _MainScreenState();
+}
+
+class _MainScreenState extends State<MainScreen> {
+  int _selectedIndex = 0;
+
+  // Список наших экранов
+  final List<Widget> _screens = [
+    const DashboardScreen(),
+    const TestsScreen(),
+    const JournalScreen(),
+    const DtcScreen(),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      // IndexedStack сохраняет состояние экранов при переключении (графики не сбрасываются)
+      body: IndexedStack(
+        index: _selectedIndex,
+        children: _screens,
+      ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _selectedIndex,
+        onDestinationSelected: (index) {
+          setState(() {
+            _selectedIndex = index;
+          });
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.dashboard_outlined),
+            selectedIcon: Icon(Icons.dashboard),
+            label: 'Датчики',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.analytics_outlined),
+            selectedIcon: Icon(Icons.analytics),
+            label: 'Анализ',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.list_alt_outlined),
+            selectedIcon: Icon(Icons.list_alt),
+            label: 'Журнал',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.bug_report_outlined),
+            selectedIcon: Icon(Icons.bug_report),
+            label: 'Коды',
+          ),
+        ],
+      ),
+    );
+  }
+}
+// ===== END OF FILE =====
+
+// ===== FILE: lib/providers/obd_provider.dart =====
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
+import '../services/bluetooth_service.dart';
+import '../services/obd_parser.dart';
+import '../services/trip_calculator.dart';
+import '../data/models/ecu_profile.dart';
+import '../data/models/nuance_event.dart';
+
+class ObdState {
+  final bool isConnected;
+  final bool isPolling;
+  final Map<String, double> liveData;
+  final List<double> trace1;
+  final List<NuanceEvent> nuances;
+  final Map<String, double> trimMedians;
+
+  ObdState({
+    this.isConnected = false,
+    this.isPolling = false,
+    this.liveData = const {},
+    this.trace1 = const [],
+    this.nuances = const [],
+    this.trimMedians = const {},
+  });
+
+  ObdState copyWith({
+    bool? isConnected,
+    bool? isPolling,
+    Map<String, double>? liveData,
+    List<double>? trace1,
+    List<NuanceEvent>? nuances,
+    Map<String, double>? trimMedians,
+  }) {
+    return ObdState(
+      isConnected: isConnected ?? this.isConnected,
+      isPolling: isPolling ?? this.isPolling,
+      liveData: liveData ?? this.liveData,
+      trace1: trace1 ?? this.trace1,
+      nuances: nuances ?? this.nuances,
+      trimMedians: trimMedians ?? this.trimMedians,
+    );
+  }
+}
+
+final bluetoothServiceProvider = Provider((ref) => BluetoothService());
+
+final obdProvider = StateNotifierProvider<ObdNotifier, ObdState>((ref) {
+  return ObdNotifier(ref.read(bluetoothServiceProvider));
+});
+
+class ObdNotifier extends StateNotifier<ObdState> {
+  final BluetoothService _btService;
+  Timer? _pollTimer;
+  bool _isUdsM86 = false;
+  final TripCalculator tripCalculator = TripCalculator();
+  EcuProfile? _ecuProfile;
+
+  final Map<String, TrimBin> _bins = {
+    'idle': TrimBin('ХХ'),
+    'low': TrimBin('Малые'),
+    'part': TrimBin('Част.'),
+    'high': TrimBin('Выс.'),
+  };
+
+  ObdNotifier(this._btService) : super(ObdState()) {
+    _loadEcuProfile();
+    _loadPersistedState();
+  }
+
+  Future<void> _loadEcuProfile() async {
+    try {
+      final jsonString = await rootBundle.loadString('lib/data/json_profiles/m86_uds.json');
+      final jsonMap = jsonDecode(jsonString);
+      _ecuProfile = EcuProfile.fromJson(jsonMap);
+    } catch (e) {
+      // Ошибка загрузки
+    }
+  }
+
+  Future<void> _loadPersistedState() async {
+    final prefs = await SharedPreferences.getInstance();
+    final logJson = prefs.getString('nuance_log');
+    if (logJson != null) {
+      final list = jsonDecode(logJson) as List;
+      state = state.copyWith(nuances: list.map((e) => NuanceEvent.fromJson(e)).toList());
+    }
+  }
+
+  Future<void> _saveState() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('nuance_log', jsonEncode(state.nuances.take(100).map((e) => e.toJson()).toList()));
+  }
+
+  void _logNuance(String id, String title, String desc, NuanceSeverity sev) {
+    final existingIdx = state.nuances.indexWhere((e) => e.id == id);
+    final updated = List<NuanceEvent>.from(state.nuances);
+
+    if (existingIdx != -1) {
+      final ex = updated.removeAt(existingIdx);
+      ex.hzCount += 1;
+      ex.timestamp = DateTime.now();
+      updated.insert(0, ex);
+    } else {
+      updated.insert(0, NuanceEvent(
+        id: id, timestamp: DateTime.now(), severity: sev,
+        title: title, description: desc,
+        snapshot: {
+          if (state.liveData['rpm'] != null) 'RPM': '${state.liveData['rpm']!.toInt()}',
+          if (state.liveData['ect'] != null) 'ОЖ': '${state.liveData['ect']!.toInt()}°C',
+        },
+      ));
+    }
+    state = state.copyWith(nuances: updated);
+    _saveState();
+  }
+
+  void clearJournal() {
+    state = state.copyWith(nuances: []);
+    _saveState();
+  }
+
+  void resetTrip() {
+    tripCalculator.reset();
+    state = state.copyWith();
+  }
+
+  Future<bool> connect(String macAddress) async {
+    final success = await _btService.connect(macAddress);
+    if (!success) return false;
+
+    await _btService.sendCommand('ATZ', timeoutMs: 2000);
+    await _btService.sendCommand('ATE0');
+    await _btService.sendCommand('ATL0');
+    await _btService.sendCommand('ATS0');
+    await _btService.sendCommand('ATH0');
+    await _btService.sendCommand('ATSP6');
+    await _btService.sendCommand('ATAL');
+    await _btService.sendCommand('ATSH7E0');
+    await _btService.sendCommand('ATCRA7E8');
+
+    final r81 = await _btService.sendCommand('1081', timeoutMs: 800);
+    if (!r81.replaceAll(' ', '').contains('5081')) {
+      final r03 = await _btService.sendCommand('1003', timeoutMs: 800);
+      if (r03.replaceAll(' ', '').contains('5003')) _isUdsM86 = true;
+    } else {
+      _isUdsM86 = false;
+    }
+
+    state = state.copyWith(isConnected: true);
+    return true;
+  }
+
+  void startPolling() {
+    if (!state.isConnected || state.isPolling) return;
+    state = state.copyWith(isPolling: true);
+
+    _pollTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) async {
+      await _pollCycle();
+    });
+  }
+
+  void stopPolling() {
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    state = state.copyWith(isPolling: false);
+  }
+
+  Future<void> _pollCycle() async {
+    if (!state.isConnected || _ecuProfile == null) return;
+
+    try {
+      final updatedData = Map<String, double>.from(state.liveData);
+
+      // 1. Читаем ПЕРВЫЙ блок (Обороты, Температура, Дроссель)
+      final block1 = _ecuProfile!.blocks[0];
+      final cmd1 = _isUdsM86 ? block1.udsCommand : block1.kwpCommand;
+      final res1 = await _btService.sendCommand(cmd1, timeoutMs: 1000);
+      final prefix1 = _isUdsM86 ? '622001' : '6101';
+      final bytes1 = ObdParser.extractBytes(res1, prefix1);
+
+      if (bytes1 != null && bytes1.isNotEmpty) {
+        for (final param in block1.parameters) {
+          final val = param.decode(bytes1);
+          if (val != null) updatedData[param.id] = val;
+        }
+      }
+
+      // 2. Читаем ВТОРОЙ блок (Пропуски, Напряжение УДК)
+      if (_ecuProfile!.blocks.length > 1) {
+        final block2 = _ecuProfile!.blocks[1];
+        final cmd2 = _isUdsM86 ? block2.udsCommand : block2.kwpCommand;
+        final res2 = await _btService.sendCommand(cmd2, timeoutMs: 1000);
+        final prefix2 = _isUdsM86 ? '622002' : '6102';
+        final bytes2 = ObdParser.extractBytes(res2, prefix2);
+
+        if (bytes2 != null && bytes2.isNotEmpty) {
+          for (final param in block2.parameters) {
+            final val = param.decode(bytes2);
+            if (val != null) updatedData[param.id] = val;
+          }
+        }
+      }
+
+      // 3. Читаем СКОРОСТЬ для БК (стандартный OBD2 PID 010D)
+      final resSpeed = await _btService.sendCommand('010D', timeoutMs: 800);
+      final bytesSpeed = ObdParser.extractBytes(resSpeed, '410D');
+      if (bytesSpeed != null && bytesSpeed.isNotEmpty) {
+        updatedData['speed'] = bytesSpeed[0].toDouble(); // км/ч
+      }
+
+      // 4. Кормим данные в БК
+      tripCalculator.update(
+        rpm: updatedData['rpm']?.toInt() ?? 0,
+        speedKmh: updatedData['speed'] ?? 0.0,
+        airMassKgH: (updatedData['map'] ?? 35) * (updatedData['rpm'] ?? 840) * 0.00025,
+        tpsPct: updatedData['tps'] ?? 0.0,
+        isDfcoActive: false,
+        stftPct: updatedData['stft'] ?? 0.0,
+        ltftPct: updatedData['ltft'] ?? 0.0,
+      );
+
+      // РАСЧЕТ МАТРИЦЫ КОРРЕКЦИЙ
+      final rpm = updatedData['rpm'] ?? 0;
+      final tps = updatedData['tps'] ?? 0;
+      final stft = updatedData['stft'];
+      final ltft = updatedData['ltft'];
+
+      if (stft != null && ltft != null && rpm > 0 && tps < 70) {
+        if (rpm >= 740 && rpm <= 960 && tps <= 4.5) _bins['idle']!.addSample(stft, ltft);
+        else if (rpm > 1600 && tps <= 12.0) _bins['low']!.addSample(stft, ltft);
+        else if (rpm >= 1300 && rpm <= 3400 && tps > 4.5 && tps <= 35.0) _bins['part']!.addSample(stft, ltft);
+        else if (tps > 35.0) _bins['high']!.addSample(stft, ltft);
+        
+        final medians = {
+          'idle': _bins['idle']!.median,
+          'low': _bins['low']!.median,
+          'part': _bins['part']!.median,
+          'high': _bins['high']!.median,
+        };
+        state = state.copyWith(trimMedians: medians);
+      }
+
+      // ЛОГИРОВАНИЕ АНОМАЛИЙ
+      if (updatedData['ect'] != null && updatedData['ect']! > 103) {
+        _logNuance('overheat', 'Перегрев ОЖ', 'Температура ${updatedData['ect']!.toInt()}°C > 103°C', NuanceSeverity.critical);
+      }
+
+      // Обновляем график
+      final updatedTrace = List<double>.from(state.trace1);
+      if (updatedData.containsKey('rpm')) {
+        updatedTrace.add(updatedData['rpm']!);
+        if (updatedTrace.length > 100) updatedTrace.removeAt(0);
+      }
+
+      state = state.copyWith(liveData: updatedData, trace1: updatedTrace);
+
+    } catch (e) {
+      // Ошибка опроса
+    }
+  }
+
+  // Чтение реальных кодов ошибок
+  Future<List<String>> readDtcs() async {
+    List<String> foundCodes = [];
+    if (!state.isConnected) return foundCodes;
+
+    try {
+      // Пробуем стандартный OBD2 запрос (03), если не выйдет — шлем UDS (190208)
+      String response = await _btService.sendCommand('03', timeoutMs: 2000);
+      List<int>? bytes = ObdParser.extractBytes(response, '43');
+
+      if (bytes == null) {
+        // Если OBD2 не ответил, пробуем UDS
+        response = await _btService.sendCommand('190208', timeoutMs: 2000);
+        bytes = ObdParser.extractBytes(response, '590208');
+      }
+
+      if (bytes != null && bytes.isNotEmpty) {
+        // Первый байт — количество ошибок. Дальше идут пары байтов (сами коды).
+        int count = bytes[0];
+        for (int i = 0; i < count; i++) {
+          if (bytes.length >= 2 + (i * 2)) {
+            int b1 = bytes[1 + (i * 2)];
+            int b2 = bytes[2 + (i * 2)];
+            if (b1 == 0 && b2 == 0) continue; // Пустые байты
+            
+            // Расшифровка DTC (P, C, B, U)
+            const typeChars = ['P', 'C', 'B', 'U'];
+            final type = typeChars[(b1 >> 6) & 0x03];
+            final code = '$type${((b1 >> 4) & 0x03)}${(b1 & 0x0F).toRadixString(16).toUpperCase()}${((b2 >> 4) & 0x0F).toRadixString(16).toUpperCase()}${(b2 & 0x0F).toRadixString(16).toUpperCase()}';
+            foundCodes.add(code);
+          }
+        }
+      }
+    } catch (e) {
+      // Ошибка чтения
+    }
+    return foundCodes;
+  }
+
+  Future<void> clearDtcs() async {
+    if (!state.isConnected) return;
+    await _btService.sendCommand('04', timeoutMs: 1500);
+    await _btService.sendCommand('14FFFFFF', timeoutMs: 1500);
+  }
+
+  Future<List<Map<String, String>>> getBluetoothDevices() async {
+    return await _btService.getPairedDevices();
+  }
+
+  // Флаг для экстренной остановки теста
+  bool _abortTest = false;
+  
+  void abortActuatorTest() {
+    _abortTest = true;
+  }
+
+  Future<void> runActuatorTest({
+    required String testName,
+    required String cmdOn,
+    required String cmdOff,
+    required int holdSeconds,
+    bool requireEngineRunning = false,
+    bool requireEngineStopped = false,
+    bool isOneShot = false,
+  }) async {
+    if (!state.isConnected) return;
+
+    // 1. ПРОВЕРКА УСЛОВИЙ БЕЗОПАСНОСТИ
+    final rpm = state.liveData['rpm']?.toInt() ?? 0;
+    if (requireEngineRunning && rpm < 500) {
+      throw Exception('Двигатель не заведен! Тест невозможен.');
+    }
+    if (requireEngineStopped && rpm > 0) {
+      throw Exception('Двигатель работает! Заглушите мотор перед тестом.');
+    }
+
+    _abortTest = false;
+    bool commandWasSent = false;
+
+    try {
+      // 2. ОТКРЫВАЕМ СЕССИЮ
+      await _btService.sendCommand(_isUdsM86 ? '1003' : '1081', timeoutMs: 1000);
+      
+      // 3. ОТПРАВЛЯЕМ ON (С проверкой на NRC)
+      final respOn = await _btService.sendCommand(cmdOn, timeoutMs: 1500);
+      
+      // Если ЭБУ вернуло Negative Response (7F) — тест не запустился
+      if (respOn.contains('7F') || respOn.contains('ERR')) {
+        throw Exception('ЭБУ отклонил команду: $respOn');
+      }
+      
+      commandWasSent = true;
+
+      // 4. ДЕРЖИМ (с проверкой на отмену и потерю связи)
+      if (!isOneShot) {
+        for (int i = 0; i < holdSeconds; i++) {
+          await Future.delayed(const Duration(seconds: 1));
+          if (!state.isConnected) {
+            throw Exception('Потеря связи с ЭБУ во время теста!');
+          }
+          if (_abortTest) {
+            throw Exception('Тест отменен пользователем.');
+          }
+        }
+      }
+
+    } finally {
+      // 5. ГАРАНТИРОВАННОЕ ОТКЛЮЧЕНИЕ (выполняется ВСЕГДА)
+      if (commandWasSent && !isOneShot) {
+        try {
+          await _btService.sendCommand(cmdOff, timeoutMs: 1500);
+          // Дублируем по обоим протоколам для надежности
+          if (_isUdsM86) {
+            await _btService.sendCommand(cmdOff, timeoutMs: 1000);
+          }
+        } catch (_) {
+          // Если даже тут связь упала — мы ничего не можем сделать, но пробуем
+        }
+      }
+      // Всегда возвращаем стандартную сессию
+      try {
+        await _btService.sendCommand('1001', timeoutMs: 800);
+      } catch (_) {}
+    }
+  }
+
+  // Универсальный сниффер: опрашивает ЭБУ и возвращает сырые HEX-ответы
+  Future<String> runSnifferDump() async {
+    if (!state.isConnected) return 'ЭБУ не подключен';
+
+    final sb = StringBuffer();
+    sb.writeln('=== ДАМП ОТВЕТОВ ЭБУ ===');
+    sb.writeln('Протокол: ${_isUdsM86 ? "UDS (22XX)" : "KWP (21XX)"}\n');
+
+    // Список команд для проверки
+    final commands = [
+      // Стандартные OBD-II (для БК)
+      ('0100', 'Поддерживаемые PID'),
+      ('0105', 'Температура ОЖ'),
+      ('010B', 'ДАД впуска (MAP)'),
+      ('010C', 'Обороты двигателя'),
+      ('010D', 'Скорость'),
+      ('0110', 'MAF (воздух)'),
+      ('0111', 'Дроссель'),
+      ('0114', 'УДК'),
+      // Расширенные М86
+      ('222001', 'UDS блок 1 (основной)'),
+      ('222002', 'UDS блок 2 (АЦП)'),
+      ('22F190', 'VIN автомобиля'),
+    ];
+
+    for (final cmd in commands) {
+      try {
+        // TesterPresent для поддержки сессии (только для UDS)
+        if (_isUdsM86) {
+          await _btService.sendCommand('3E00', timeoutMs: 400);
+        }
+        
+        final resp = await _btService.sendCommand(cmd.$1, timeoutMs: 1500);
+        final cleanResp = resp.replaceAll('\n', ' ').replaceAll('\r', ' ');
+        
+        final status = cleanResp.contains('7F') || cleanResp.isEmpty || cleanResp.contains('NO DATA')
+            ? '❌ НЕ ОТВЕЧАЕТ'
+            : '✅ ОТВЕТ';
+        
+        sb.writeln('${cmd.$1} (${cmd.$2}) → $status');
+        sb.writeln('   $cleanResp\n');
+      } catch (e) {
+        sb.writeln('${cmd.$1} (${cmd.$2}) → ОШИБКА: $e\n');
+      }
+    }
+
+    return sb.toString();
+  }
+
+  // Адаптация дросселя
+  Future<String> runThrottleAdaptation(Function(String) onUpdate) async {
+    if (!state.isConnected) return 'ЭБУ не подключен';
+
+    // 1. Проверка условий
+    final rpm = state.liveData['rpm']?.toInt() ?? 0;
+    final ect = state.liveData['ect']?.toInt() ?? 0;
+    final tps = state.liveData['tps']?.toDouble() ?? 0.0;
+    
+    if (rpm > 0) return '⛔ СРЫВ: Двигатель должен быть заглушен!';
+    if (ect < 5 || ect > 100) return '⛔ СРЫВ: Температура ОЖ вне коридора 5..100°C!';
+    if (tps > 9.5) return '⛔ СРЫВ: Нажата педаль газа!';
+
+    final sw = Stopwatch()..start();
+    int lastEct = 0;
+
+    while (sw.elapsedMilliseconds < 30000) {
+      if (!state.isConnected) return '⛔ СРЫВ: Потеря связи с ЭБУ!';
+      
+      final rVolt = await _btService.sendCommand('ATRV', timeoutMs: 500);
+      final volt = double.tryParse(RegExp(r'(\d+\.\d+)').firstMatch(rVolt)?.group(1) ?? '12.0') ?? 12.0;
+      if (volt < 10.0) return '⛔ СРЫВ: Напряжение ниже 10.0 В!';
+
+      final rTps = await _btService.sendCommand('0111', timeoutMs: 500);
+      final tpsBytes = ObdParser.extractBytes(rTps, '4111');
+      if (tpsBytes != null && tpsBytes[0] * 100.0 / 255.0 > 9.5) return '⛔ СРЫВ: Педаль нажата!';
+
+      if (sw.elapsedMilliseconds - lastEct > 5000) {
+        final rEct = await _btService.sendCommand('0105', timeoutMs: 500);
+        final ectBytes = ObdParser.extractBytes(rEct, '4105');
+        if (ectBytes != null && (ectBytes[0] - 40) > 100) return '⛔ СРЫВ: ОЖ > 100°C!';
+        lastEct = sw.elapsedMilliseconds;
+      }
+
+      onUpdate('Шаг 1/2: Осталось ${30 - (sw.elapsedMilliseconds ~/ 1000)} сек');
+      await Future.delayed(const Duration(milliseconds: 250));
+    }
+
+    for (int i = 10; i > 0; i--) {
+      onUpdate('Шаг 2/2: ВЫКЛЮЧИТЕ ЗАЖИГАНИЕ! Ждем главное реле... $i сек');
+      await Future.delayed(const Duration(seconds: 1));
+    }
+
+    return '✅ Адаптация дросселя успешно выполнена!';
+  }
+
+  // Чтение стоп-кадра (Freeze Frame) для конкретной ошибки
+  Future<Map<String, String>> getFreezeFrame(String dtcCode) async {
+    final result = <String, String>{};
+    if (!state.isConnected) return result;
+
+    try {
+      // Стандартные запросы Mode 02 для М86
+      final Map<String, String> pids = {
+        '020C00': 'Обороты',     // Префикс ответа: 420C
+        '020500': 'Темп. ОЖ',    // Префикс ответа: 4205
+        '020B00': 'ДАД впуск',   // Префикс ответа: 420B
+        '020600': 'STFT',        // Префикс ответа: 4206
+        '020700': 'LTFT',        // Префикс ответа: 4207
+        '020D00': 'Скорость',    // Префикс ответа: 420D
+        '024200': 'Бортсеть',    // Префикс ответа: 4242
+      };
+
+      for (final entry in pids.entries) {
+        final cmd = entry.key;
+        final label = entry.value;
+        final prefix = cmd.substring(0, 4); 
+        final expectedPrefix = '42${prefix.substring(2)}'; 
+
+        final resp = await _btService.sendCommand(cmd, timeoutMs: 1000);
+        final bytes = ObdParser.extractBytes(resp, expectedPrefix);
+
+        if (bytes != null && bytes.isNotEmpty) {
+          if (cmd == '020C00' && bytes.length >= 3) {
+            result[label] = '${((bytes[1] * 256) + bytes[2]) ~/ 4} об/мин';
+          } else if (cmd == '020500' && bytes.length >= 2) {
+            result[label] = '${bytes[1] - 40} °C';
+          } else if (cmd == '020B00' && bytes.length >= 2) {
+            result[label] = '${bytes[1]} кПа';
+          } else if (cmd == '020600' && bytes.length >= 2) {
+            result[label] = '${((bytes[1] - 128) * 100 / 128).toStringAsFixed(1)} %';
+          } else if (cmd == '020700' && bytes.length >= 2) {
+            result[label] = '${((bytes[1] - 128) * 100 / 128).toStringAsFixed(1)} %';
+          } else if (cmd == '020D00' && bytes.length >= 2) {
+            result[label] = '${bytes[1]} км/ч';
+          } else if (cmd == '024200' && bytes.length >= 3) {
+            result[label] = '${((bytes[1] * 256) + bytes[2]) / 1000.0} В';
+          }
+        }
+      }
+    } catch (e) {
+      // Игнорируем ошибки чтения
+    }
+    return result;
+  }
+
+  // Экспорт журнала в CSV
+  Future<String> exportJournalToCsv() async {
+    final sb = StringBuffer();
+    
+    // Заголовок файла
+    sb.writeln('=== ЖУРНАЛ ДИАГНОСТИКИ (VestaScan Pro v2.0.0) ===');
+    sb.writeln('Дата экспорта: ${DateTime.now().toIso8601String()}');
+    sb.writeln('Всего событий: ${state.nuances.length}');
+    sb.writeln('Протокол: ${_isUdsM86 ? "UDS" : "KWP-CAN"}');
+    sb.writeln('');
+    
+    // Заголовки колонок
+    sb.writeln('Time_ISO;Severity;Title;Description;HZ_Count;Snapshot');
+    
+    // Данные
+    for (final e in state.nuances) {
+      final snapshotStr = e.snapshot.entries
+          .map((entry) => '${entry.key}=${entry.value}')
+          .join(' | ');
+      sb.writeln(
+        '${e.timestamp.toIso8601String()};'
+        '${e.severity.name.toUpperCase()};'
+        '${e.title.replaceAll(';', ',')};'
+        '${e.description.replaceAll(';', ',').replaceAll('\n', ' ')};'
+        '${e.hzCount};'
+        '$snapshotStr'
+      );
+    }
+    
+    // Добавляем данные БК
+    sb.writeln('');
+    sb.writeln('=== ДАННЫЕ ПОЕЗДКИ ===');
+    sb.writeln('Пробег: ${tripCalculator.totalDistanceKm.toStringAsFixed(2)} км');
+    sb.writeln('Средний расход: ${tripCalculator.averageConsumptionL100Km.toStringAsFixed(2)} л/100км');
+    sb.writeln('Потрачено топлива: ${tripCalculator.totalFuelLiters.toStringAsFixed(3)} л');
+    sb.writeln('Максимальная скорость: ${tripCalculator.maxSpeedKmh.toStringAsFixed(1)} км/ч');
+    
+    // Текущие живые данные
+    sb.writeln('');
+    sb.writeln('=== ТЕКУЩИЕ ДАННЫЕ ===');
+    sb.writeln('Обороты: ${state.liveData['rpm']?.toInt() ?? '---'} об/мин');
+    sb.writeln('ОЖ: ${state.liveData['ect']?.toInt() ?? '---'} °C');
+    sb.writeln('ДАД: ${state.liveData['map']?.toInt() ?? '---'} кПа');
+    sb.writeln('STFT: ${state.liveData['stft']?.toStringAsFixed(1) ?? '---'} %');
+    sb.writeln('LTFT: ${state.liveData['ltft']?.toStringAsFixed(1) ?? '---'} %');
+    
+    final csvText = sb.toString();
+    
+    // 1. Копируем в буфер обмена
+    await Clipboard.setData(ClipboardData(text: csvText));
+    
+    // 2. Сохраняем в файл
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final filename = 'VestaScan_${DateTime.now().toIso8601String().replaceAll(':', '-').substring(0, 19)}.csv';
+      final file = File('${dir.path}/$filename');
+      await file.writeAsString(csvText);
+      return '✅ Экспортировано:\n${file.path}';
+    } catch (e) {
+      return '⚠️ В буфер скопировано, но файл не сохранен: $e';
+    }
+  }
+}
+// ===== END OF FILE =====
+
+// ===== FILE: lib/services/ai_prompt_builder.dart =====
+class AiPromptBuilder {
+  static String generateSnapshot({
+    required Map<String, double> liveData,
+    required double tripDistance,
+    required double fuelConsumed,
+    String userNotes = "",
+  }) {
+    final buffer = StringBuffer();
+    
+    buffer.writeln('Действуй как эксперт-автодиагност. Проанализируй лог телеметрии автомобиля Lada Vesta (ЭБУ Итэлма М86 UDS) и найди возможные аномалии.');
+    if (userNotes.isNotEmpty) {
+      buffer.writeln('Жалоба водителя: "$userNotes"');
+    }
+    
+    buffer.writeln('\n--- ДАТЧИКИ ДВИГАТЕЛЯ (ТЕКУЩИЕ) ---');
+    buffer.writeln('Обороты: ${liveData["rpm"]?.toInt() ?? 0} об/мин');
+    buffer.writeln('Температура ОЖ: ${liveData["ect"]?.toInt() ?? 0} °C');
+    
+    // Безопасное извлечение коррекций, если они есть
+    if (liveData.containsKey('stft')) {
+      buffer.writeln('Краткосрочная коррекция (STFT): ${liveData["stft"]}%');
+    }
+    if (liveData.containsKey('ltft')) {
+      buffer.writeln('Долгосрочная коррекция (LTFT): ${liveData["ltft"]}%');
+    }
+
+    buffer.writeln('\n--- ДАННЫЕ БОРТОВОГО КОМПЬЮТЕРА ---');
+    buffer.writeln('Длительность текущей поездки: ${tripDistance.toStringAsFixed(1)} км');
+    buffer.writeln('Потрачено топлива: ${fuelConsumed.toStringAsFixed(2)} л');
+
+    buffer.writeln('\nТвоя задача:');
+    buffer.writeln('1. Оцени адекватность показаний датчиков для текущего режима.');
+    buffer.writeln('2. Если есть отклонения, назови 3 наиболее вероятные аппаратные причины.');
+    buffer.writeln('3. Какие параметры мне нужно проверить дополнительно, чтобы сузить поиск?');
+
+    return buffer.toString();
+  }
+}
+// ===== END OF FILE =====
+
+// ===== FILE: lib/services/bluetooth_service.dart =====
+import 'dart:async';
+import 'package:flutter_bluetooth_classic_serial/flutter_bluetooth_classic.dart';
+
+class BluetoothService {
+  final FlutterBluetoothClassic _bt = FlutterBluetoothClassic();
+  final StringBuffer _rxBuffer = StringBuffer();
+  
+  Completer<void>? _cmdLock;
+  bool _isConnected = false;
+  StreamSubscription? _dataSubscription;
+
+  bool get isConnected => _isConnected;
+
+  Future<List<Map<String, String>>> getPairedDevices() async {
+    try {
+      final devices = await _bt.getPairedDevices();
+      return devices.map((d) => {'name': d.name, 'address': d.address}).toList();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  Future<bool> connect(String address) async {
+    try {
+      await _bt.connect(address);
+      _isConnected = true;
+      _dataSubscription = _bt.onDataReceived.listen((data) {
+        _rxBuffer.write(String.fromCharCodes(data.data));
+      });
+      return true;
+    } catch (e) {
+      _isConnected = false;
+      return false;
+    }
+  }
+
+  Future<void> disconnect() async {
+    try {
+      await _dataSubscription?.cancel();
+      await _bt.disconnect();
+    } finally {
+      _isConnected = false;
+    }
+  }
+
+  Future<String> sendCommand(String cmd, {int timeoutMs = 1200, int postDelayMs = 50}) async {
+    if (!_isConnected) return 'ERR:NOT_CONNECTED';
+    while (_cmdLock != null) {
+      await _cmdLock!.future;
+    }
+    final lock = Completer<void>();
+    _cmdLock = lock;
+
+    try {
+      _rxBuffer.clear();
+      await _bt.sendString('$cmd\r');
+      final sw = Stopwatch()..start();
+      while (sw.elapsedMilliseconds < timeoutMs) {
+        await Future.delayed(const Duration(milliseconds: 20));
+        final current = _rxBuffer.toString();
+        if (current.contains('>')) {
+          if (postDelayMs > 0) await Future.delayed(Duration(milliseconds: postDelayMs));
+          return current.replaceAll('>', '').replaceAll('\r', '\n').trim();
+        }
+      }
+      return _rxBuffer.toString().trim();
+    } catch (e) {
+      return 'ERR:$e';
+    } finally {
+      _cmdLock = null;
+      lock.complete();
+    }
+  }
+}
+// ===== END OF FILE =====
+
+// ===== FILE: lib/services/obd_parser.dart =====
+// ISO 15765-2 парсер. Не блокирует кадры с байтом 7F внутри данных.
+// Отсекает только реальный Negative Response (7F + код сервиса в начале).
+class ObdParser {
+  static List<int>? extractBytes(String resp, String expectedPrefix) {
+    final upper = resp.toUpperCase();
+    if (upper.contains('NO DATA') ||
+        upper.contains('ERROR') ||
+        upper.contains('UNABLE') ||
+        upper.contains('STOPPED') ||
+        upper.contains('?')) {
+      return null;
+    }
+
+    int? expectedTotalLen;
+    final lines = upper.split(RegExp(r'[\r\n]+'));
+    final cleanHexBuf = StringBuffer();
+
+    for (int lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+      var line = lines[lineIdx].trim();
+      if (line.isEmpty || line.startsWith('SEARCHING')) continue;
+
+      // 12-битный заголовок длины ISO-TP («01A», «024») идёт отдельной первой строкой
+      if (lineIdx == 0 &&
+          line.length == 3 &&
+          RegExp(r'^[0-9A-F]{3}$').hasMatch(line)) {
+        expectedTotalLen = int.tryParse(line, radix: 16);
+        continue;
+      }
+
+      // Отрезаем префикс номера кадра ISO-TP ("0:", "1:", "2:", ...)
+      final colonIdx = line.indexOf(':');
+      if (colonIdx != -1 && colonIdx <= 2) {
+        line = line.substring(colonIdx + 1).trim();
+      }
+
+      // Отрезаем CAN-ID заголовки вида 7E8
+      if (line.startsWith('7E8')) {
+        line = line.substring(3).trim();
+      }
+
+      final hexOnly = line.replaceAll(RegExp(r'[^0-9A-F]'), '');
+      cleanHexBuf.write(hexOnly);
+    }
+
+    final clean = cleanHexBuf.toString();
+    if (clean.isEmpty) return null;
+
+    // Проверка Negative Response только в начале ответа
+    final pref = expectedPrefix.toUpperCase();
+    if (pref.length >= 2) {
+      final respServiceByte = int.tryParse(pref.substring(0, 2), radix: 16);
+      if (respServiceByte != null && respServiceByte >= 0x40) {
+        final reqServiceHex = (respServiceByte - 0x40)
+            .toRadixString(16)
+            .padLeft(2, '0')
+            .toUpperCase();
+        if (clean.startsWith('7F$reqServiceHex') ||
+            clean.startsWith('037F$reqServiceHex')) {
+          return null;
+        }
+      }
+    }
+
+    final idx = clean.indexOf(pref);
+    if (idx == -1) return null;
+
+    final hexData = clean.substring(idx + pref.length);
+    final bytes = <int>[];
+    for (int i = 0; i + 1 < hexData.length; i += 2) {
+      final b = int.tryParse(hexData.substring(i, i + 2), radix: 16);
+      if (b != null) bytes.add(b);
+    }
+
+    final payloadMaxLen = expectedTotalLen != null
+        ? (expectedTotalLen - (pref.length ~/ 2))
+        : null;
+    if (payloadMaxLen != null &&
+        payloadMaxLen > 0 &&
+        bytes.length > payloadMaxLen) {
+      return bytes.sublist(0, payloadMaxLen);
+    }
+    return bytes;
+  }
+
+  static int? tryParseMode06Counter(String resp, String expectedPrefix) {
+    final b = extractBytes(resp, expectedPrefix);
+    if (b == null || b.length < 4) return null;
+    if (b.length >= 5) return (b[3] * 256) + b[4];
+    return (b[2] * 256) + b[3];
+  }
+}
+
+// ===== END OF FILE =====
+
+// ===== FILE: lib/services/ota_service.dart =====
+import 'dart:convert';
+import 'dart:io';
+
+class OtaService {
+  // Константы твоего репозитория
+  static const String currentVersion = '2.1.0';
+  static const String githubRepo = 'MrValenOK/lada_vesta_scanner';
+
+  // Метод проверки обновлений
+  static Future<Map<String, dynamic>?> checkForUpdates() async {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 8);
+
+    try {
+      final req = await client.getUrl(
+        Uri.parse('https://api.github.com/repos/$githubRepo/releases/latest'),
+      );
+      req.headers.set('User-Agent', 'VestaScanPro-App');
+      req.headers.set('Accept', 'application/vnd.github+json');
+      
+      final resp = await req.close();
+
+      if (resp.statusCode == 200) {
+        final bodyStr = await resp.transform(utf8.decoder).join();
+        final data = jsonDecode(bodyStr) as Map<String, dynamic>;
+
+        final tagName = (data['tag_name'] ?? currentVersion).toString();
+        final notes = (data['body'] ?? '').toString().trim();
+        
+        String apkUrl = 'https://github.com/$githubRepo/releases/latest/download/app-release.apk';
+        if (data['assets'] is List && (data['assets'] as List).isNotEmpty) {
+          for (final asset in (data['assets'] as List)) {
+            final name = (asset['name'] ?? '').toString().toLowerCase();
+            if (name.endsWith('.apk') && asset['browser_download_url'] != null) {
+              apkUrl = asset['browser_download_url'].toString();
+              break;
+            }
+          }
+        }
+
+        final isNewer = _isVersionHigher(tagName, currentVersion);
+
+        return {
+          'hasUpdate': isNewer,
+          'latestVersion': tagName,
+          'releaseNotes': notes.isNotEmpty ? notes : 'Обновление алгоритмов диагностики.',
+          'apkUrl': apkUrl,
+        };
+      }
+    } catch (e) {
+      // Игнорируем ошибки сети
+    } finally {
+      client.close(force: true);
+    }
+    return null;
+  }
+
+  // Сравнение версий (например, v2.2.0 > v2.1.0)
+  static bool _isVersionHigher(String remote, String local) {
+    String clean(String v) => v.split('+').first.split('-').first.replaceAll(RegExp(r'[^0-9.]'), '');
+    
+    final rParts = clean(remote).split('.').map((e) => int.tryParse(e) ?? 0).toList();
+    final lParts = clean(local).split('.').map((e) => int.tryParse(e) ?? 0).toList();
+    
+    final maxLen = rParts.length > lParts.length ? rParts.length : lParts.length;
+    for (int i = 0; i < maxLen; i++) {
+      final r = i < rParts.length ? rParts[i] : 0;
+      final l = i < lParts.length ? lParts[i] : 0;
+      if (r > l) return true;
+      if (r < l) return false;
+    }
+    return false;
+  }
+}
+// ===== END OF FILE =====
+
+// ===== FILE: lib/services/trip_calculator.dart =====
+class TripCalculator {
+  double totalDistanceKm = 0.0;
+  double totalFuelLiters = 0.0;
+  double maxSpeedKmh = 0.0;
+
+  // Текущие показатели для вывода на дашборд в реальном времени
+  double instantFuelLpH = 0.0;
+  double instantFuelL100Km = 0.0;
+
+  DateTime? _lastTickTime;
+
+  // Константы для бензина АИ-92 / АИ-95
+  final double stoichiometricRatio = 14.7;
+  final double fuelDensityKgL = 0.75; // ~0.75 кг/л при 15-20°C
+
+  void update({
+    required int rpm,
+    required double speedKmh,
+    required double airMassKgH,
+    required double tpsPct,
+    required bool isDfcoActive,
+    double stftPct = 0.0, // Краткосрочная коррекция М86 (%)
+    double ltftPct = 0.0, // Долгосрочная коррекция М86 (%)
+  }) {
+    final now = DateTime.now();
+    if (_lastTickTime == null) {
+      _lastTickTime = now;
+      return;
+    }
+
+    final deltaTimeSec = now.difference(_lastTickTime!).inMilliseconds / 1000.0;
+    final deltaHours = deltaTimeSec / 3600.0;
+    _lastTickTime = now;
+
+    // Защита от зависания Bluetooth или паузы опроса
+    if (deltaTimeSec <= 0.0 || deltaTimeSec > 5.0) return;
+
+    // 1. Интеграл скорости (пробег)
+    if (speedKmh > 0) {
+      totalDistanceKm += speedKmh * deltaHours;
+      if (speedKmh > maxSpeedKmh) maxSpeedKmh = speedKmh;
+    }
+
+    // 2. Расход топлива с защитой ПХХ (отсечка топливоподачи)
+    double currentFuelKgH = 0.0;
+
+    // Если ЭБУ остановил двигатель (rpm == 0) или активен режим ПХХ — подача 0
+    final bool isCutoff = (rpm < 300) || isDfcoActive || (tpsPct < 2.0 && rpm > 1500);
+
+    if (!isCutoff && airMassKgH > 0) {
+      // Коэффициент коррекции смеси по УДК (например, STFT -3.9% и LTFT +0.8%)
+      final double trimFactor = (1.0 + (stftPct / 100.0)) * (1.0 + (ltftPct / 100.0));
+      currentFuelKgH = (airMassKgH / stoichiometricRatio) * trimFactor;
+    }
+
+    // Перевод из кг/ч в л/ч
+    instantFuelLpH = currentFuelKgH / fuelDensityKgL;
+    totalFuelLiters += instantFuelLpH * deltaHours;
+
+    // Мгновенный путевой расход (считаем только при движении > 5 км/ч)
+    if (speedKmh >= 5.0) {
+      instantFuelL100Km = (instantFuelLpH / speedKmh) * 100.0;
+    } else {
+      instantFuelL100Km = 0.0; // На месте показываем instantFuelLpH (л/ч)
+    }
+  }
+
+  // Средний расход на 100 км за поездку
+  double get averageConsumptionL100Km {
+    if (totalDistanceKm < 0.1) return 0.0;
+    return (totalFuelLiters / totalDistanceKm) * 100.0;
+  }
+
+  void reset() {
+    totalDistanceKm = 0.0;
+    totalFuelLiters = 0.0;
+    maxSpeedKmh = 0.0;
+    instantFuelLpH = 0.0;
+    instantFuelL100Km = 0.0;
+    _lastTickTime = null;
+  }
+}
+// ===== END OF FILE =====
+
