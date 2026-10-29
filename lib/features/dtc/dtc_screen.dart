@@ -14,7 +14,7 @@ class _DtcScreenState extends ConsumerState<DtcScreen> {
   bool _isLoading = false;
   bool _hasScanned = false;
   List<String> _dtcs = []; // Теперь храним просто строки кодов
-  Map<String, String> _freezeFrameData = {};
+  Map<String, double?> _freezeFrameData = {};
 
   void _scanDtc() async {
     final obdNotifier = ref.read(obdProvider.notifier);
@@ -193,7 +193,7 @@ class _DtcScreenState extends ConsumerState<DtcScreen> {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           Text(e.key, style: const TextStyle(color: Colors.grey, fontSize: 14)),
-                          Text(e.value, style: const TextStyle(color: AppColors.darkAccent, fontWeight: FontWeight.bold, fontSize: 14, fontFamily: 'monospace')),
+                          Text(e.value?.toStringAsFixed(2) ?? '---', style: const TextStyle(color: AppColors.darkAccent, fontWeight: FontWeight.bold, fontSize: 14, fontFamily: 'monospace')),
                         ],
                       ),
                     )),

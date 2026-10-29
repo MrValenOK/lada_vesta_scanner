@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/obd_provider.dart';
-import '../../data/models/nuance_event.dart';
 import '../../core/theme.dart';
 
 class JournalScreen extends ConsumerStatefulWidget {

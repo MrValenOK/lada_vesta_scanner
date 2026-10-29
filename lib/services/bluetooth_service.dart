@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter_bluetooth_classic_serial/flutter_bluetooth_classic.dart';
 
 class BluetoothService {
@@ -8,33 +9,41 @@ class BluetoothService {
 
   final FlutterBluetoothClassic _bt = FlutterBluetoothClassic();
   final StringBuffer _rxBuffer = StringBuffer();
-  
   Completer<void>? _cmdLock;
   bool _isConnected = false;
   StreamSubscription? _dataSubscription;
+  StreamSubscription? _connSubscription;
 
   bool get isConnected => _isConnected;
 
-  Future<List<Map<String, String>>> getPairedDevices() async {
+  Future<List<BluetoothDevice>> getPairedDevices() async {
     try {
-      final devices = await _bt.getPairedDevices();
-      return devices.map((d) => {'name': d.name, 'address': d.address}).toList();
-    } catch (e) {
+      final list = await _bt.getPairedDevices();
+      final unique = <String, BluetoothDevice>{};
+      for (final d in list) {
+        if (d.address.isNotEmpty) unique[d.address] = d;
+      }
+      return unique.values.toList();
+    } catch (_) {
       return [];
     }
   }
 
   Future<bool> connect(String address) async {
-    // Если уже подключены, не переподключаемся
-    if (_isConnected) return true; 
+    if (_isConnected) return true;
     try {
-      await _bt.connect(address);
-      _isConnected = true;
-      
-      _dataSubscription = _bt.onDataReceived.listen((data) {
-        _rxBuffer.write(String.fromCharCodes(data.data));
+      final ok = await _bt.connect(address);
+      _isConnected = ok;
+      await _dataSubscription?.cancel();
+      await _connSubscription?.cancel();
+
+      _connSubscription = _bt.onConnectionChanged.listen((state) {
+        _isConnected = state.isConnected;
       });
-      return true;
+      _dataSubscription = _bt.onDataReceived.listen((data) {
+        _rxBuffer.write(utf8.decode(data.data, allowMalformed: true));
+      });
+      return ok;
     } catch (e) {
       _isConnected = false;
       return false;
@@ -44,34 +53,32 @@ class BluetoothService {
   Future<void> disconnect() async {
     try {
       await _dataSubscription?.cancel();
+      await _connSubscription?.cancel();
       await _bt.disconnect();
     } finally {
       _isConnected = false;
     }
   }
 
-  Future<String> sendCommand(String cmd, {int timeoutMs = 1200, int postDelayMs = 50}) async {
+  Future<String> sendCommand(String cmd, {int timeoutMs = 1100, int postDelayMs = 60}) async {
     if (!_isConnected) return 'ERR:NOT_CONNECTED';
-
     while (_cmdLock != null) {
       await _cmdLock!.future;
     }
-    
+
     final lock = Completer<void>();
     _cmdLock = lock;
 
     try {
       _rxBuffer.clear();
       await _bt.sendString('$cmd\r');
-
       final sw = Stopwatch()..start();
+
       while (sw.elapsedMilliseconds < timeoutMs) {
-        await Future.delayed(const Duration(milliseconds: 20));
-        final current = _rxBuffer.toString();
-        
-        if (current.contains('>')) {
+        await Future.delayed(const Duration(milliseconds: 25));
+        if (_rxBuffer.toString().contains('>')) {
           if (postDelayMs > 0) await Future.delayed(Duration(milliseconds: postDelayMs));
-          return current.replaceAll('>', '').replaceAll('\r', '\n').trim();
+          return _rxBuffer.toString().replaceAll('>', '').replaceAll('\r', '\n').trim();
         }
       }
       return _rxBuffer.toString().trim();
@@ -81,16 +88,5 @@ class BluetoothService {
       _cmdLock = null;
       lock.complete();
     }
-  }
-
-  Future<void> switchModule(String txId, String rxId) async {
-    // Задаем адрес, кому шлем (например, 740 для ABS)
-    await sendCommand('ATSH$txId');
-    // Задаем адрес, от кого ждем ответ (обычно TX + 8, т.е. 748)
-    await sendCommand('ATCRA$rxId');
-    // Настраиваем Flow Control для этого блока
-    await sendCommand('ATFCSH$txId');
-    // Открываем UDS-сессию для этого блока
-    await sendCommand('1003'); 
   }
 }

@@ -1,1152 +1,607 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:path_provider/path_provider.dart';
 import '../services/bluetooth_service.dart';
 import '../services/obd_parser.dart';
 import '../services/trip_calculator.dart';
 import '../data/models/ecu_profile.dart';
-import '../data/models/nuance_event.dart';
 
+// ===== МОДЕЛЬ СОБЫТИЯ ЖУРНАЛА =====
+enum NuanceSeverity { info, warning, critical }
+
+class NuanceEvent {
+  final String id;
+  DateTime timestamp;
+  NuanceSeverity severity;
+  String title;
+  String description;
+  Map<String, String> snapshot;
+  int hzCount;
+
+  NuanceEvent({
+    required this.id,
+    required this.timestamp,
+    required this.severity,
+    required this.title,
+    required this.description,
+    required this.snapshot,
+    this.hzCount = 1,
+  });
+
+  String get timeStr =>
+      "${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}:${timestamp.second.toString().padLeft(2, '0')}";
+}
+
+// ===== СОСТОЯНИЕ =====
 class ObdState {
   final bool isConnected;
   final bool isPolling;
-  final String connectedDevice;   // ← НОВОЕ
+  final String connectedDevice;
+  final String ecuId;
+  final String ecuType;
+  final bool isUdsM86; // Оставил псевдоним для совместимости с его кодом, если где-то используется
+  final bool isUds;
+  final String statusText;
   final Map<String, double> liveData;
-  final List<double> trace1;
-  final List<double> trace2;
+  final List<double> trace1; // УДК (0..1.8 В)
+  final List<double> trace2; // ДДК (0..1.8 В)
+  final bool isRunningSniffer;
+  final String snifferDump;
+  final String rawLastBlock1;
   final List<NuanceEvent> nuances;
-  final Map<String, double> trimMedians;
+  final List<String> dtcList;
+  final String? lastError;
 
   ObdState({
     this.isConnected = false,
     this.isPolling = false,
-    this.connectedDevice = '',
-    this.liveData = const {  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-},
+    this.connectedDevice = '---',
+    this.ecuId = '---',
+    this.ecuType = 'Итэлма М86',
+    this.isUds = true,
+    this.isUdsM86 = true,
+    this.statusText = 'Выберите адаптер и нажмите Старт',
+    this.liveData = const {},
     this.trace1 = const [],
     this.trace2 = const [],
+    this.isRunningSniffer = false,
+    this.snifferDump = 'Нажмите «Снять HEX-дамп», чтобы опросить регистры KWP/UDS (222001, 220401 и др.).',
+    this.rawLastBlock1 = '---',
     this.nuances = const [],
-    this.trimMedians = const {  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-},
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-});
+    this.dtcList = const [],
+    this.lastError,
+  });
 
   ObdState copyWith({
     bool? isConnected,
     bool? isPolling,
     String? connectedDevice,
+    String? ecuId,
+    String? ecuType,
+    bool? isUds,
+    bool? isUdsM86,
+    String? statusText,
     Map<String, double>? liveData,
     List<double>? trace1,
     List<double>? trace2,
+    bool? isRunningSniffer,
+    String? snifferDump,
+    String? rawLastBlock1,
     List<NuanceEvent>? nuances,
-    Map<String, double>? trimMedians,
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}) {
+    List<String>? dtcList,
+    String? lastError,
+  }) {
     return ObdState(
       isConnected: isConnected ?? this.isConnected,
       isPolling: isPolling ?? this.isPolling,
       connectedDevice: connectedDevice ?? this.connectedDevice,
+      ecuId: ecuId ?? this.ecuId,
+      ecuType: ecuType ?? this.ecuType,
+      isUds: isUds ?? this.isUds,
+      isUdsM86: isUdsM86 ?? this.isUdsM86,
+      statusText: statusText ?? this.statusText,
       liveData: liveData ?? this.liveData,
       trace1: trace1 ?? this.trace1,
       trace2: trace2 ?? this.trace2,
+      isRunningSniffer: isRunningSniffer ?? this.isRunningSniffer,
+      snifferDump: snifferDump ?? this.snifferDump,
+      rawLastBlock1: rawLastBlock1 ?? this.rawLastBlock1,
       nuances: nuances ?? this.nuances,
-      trimMedians: trimMedians ?? this.trimMedians,
+      dtcList: dtcList ?? this.dtcList,
+      lastError: lastError,
     );
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
   }
 }
 
+final bluetoothServiceProvider = Provider((ref) => BluetoothService());
+
 final obdProvider = StateNotifierProvider<ObdNotifier, ObdState>((ref) {
-  return ObdNotifier();
-  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
+  return ObdNotifier(ref.read(bluetoothServiceProvider));
 });
 
 class ObdNotifier extends StateNotifier<ObdState> {
-  final BluetoothService _btService = BluetoothService();
-  Timer? _pollTimer;
-  bool _isUdsM86 = false;
-  final TripCalculator tripCalculator = TripCalculator();
+  final BluetoothService _btService;
+  bool _isCycleBusy = false;
+  int _cycle = 0;
+  int _consecutiveErrors = 0;
   EcuProfile? _ecuProfile;
-  bool _isPollingBusy = false;
+  final TripCalculator tripCalculator = TripCalculator();
+  final Map<String, DateTime> _lastNuanceTimes = {};
 
-  final Map<String, TrimBin> _bins = {
-    'idle': TrimBin('ХХ'),
-    'low': TrimBin('Малые'),
-    'part': TrimBin('Част.'),
-    'high': TrimBin('Выс.'),
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
+  ObdNotifier(this._btService) : super(ObdState()) {
+    _loadProfile();
   }
-};
 
-  ObdNotifier() : super(ObdState()) {
-    _loadEcuProfile();
-    _loadPersistedState();
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-  Future<void> _loadEcuProfile() async {
+  Future<void> _loadProfile() async {
     try {
       final jsonString = await rootBundle.loadString('lib/data/json_profiles/m86_uds.json');
-      final jsonMap = jsonDecode(jsonString);
-      _ecuProfile = EcuProfile.fromJson(jsonMap);
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
+      _ecuProfile = EcuProfile.fromJson(jsonDecode(jsonString));
+    } catch (_) {}
   }
-} catch (e) {
-      // Ошибка загрузки
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-  Future<void> _loadPersistedState() async {
-    final prefs = await SharedPreferences.getInstance();
-    final logJson = prefs.getString('nuance_log');
-    if (logJson != null) {
-      final list = jsonDecode(logJson) as List;
-      state = state.copyWith(nuances: list.map((e) => NuanceEvent.fromJson(e)).toList());
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-  Future<void> _saveState() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('nuance_log', jsonEncode(state.nuances.take(100).map((e) => e.toJson()).toList()));
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-  void _logNuance(String id, String title, String desc, NuanceSeverity sev) {
-    final existingIdx = state.nuances.indexWhere((e) => e.id == id);
-    final updated = List<NuanceEvent>.from(state.nuances);
-
-    if (existingIdx != -1) {
-      final ex = updated.removeAt(existingIdx);
-      ex.hzCount += 1;
-      ex.timestamp = DateTime.now();
-      updated.insert(0, ex);
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} else {
-      updated.insert(0, NuanceEvent(
-        id: id, timestamp: DateTime.now(), severity: sev,
-        title: title, description: desc,
-        snapshot: {
-          if (state.liveData['rpm'] != null) 'RPM': '${state.liveData['rpm']!.toInt()  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}',
-          if (state.liveData['ect'] != null) 'ОЖ': '${state.liveData['ect']!.toInt()  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}°C',
-          Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-},
-      ));
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-    state = state.copyWith(nuances: updated);
-    _saveState();
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-  void clearJournal() {
-    state = state.copyWith(nuances: []);
-    _saveState();
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-  void resetTrip() {
-    tripCalculator.reset();
-    state = state.copyWith();
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
 
   Future<bool> connect(String macAddress) async {
+    state = state.copyWith(statusText: 'Подключение к $macAddress...');
     final success = await _btService.connect(macAddress);
-    if (!success) return false;
+    if (!success) {
+      state = state.copyWith(isConnected: false, statusText: 'Ошибка подключения к ELM327');
+      return false;
+    }
 
-    await _btService.sendCommand('ATZ', timeoutMs: 2000);
-    await _btService.sendCommand('ATE0');
-    await _btService.sendCommand('ATL0');
-    await _btService.sendCommand('ATS0');
-    await _btService.sendCommand('ATH0');
-    await _btService.sendCommand('ATSP6');
-    await _btService.sendCommand('ATAL');
-    await _btService.sendCommand('ATSH7E0');
-    await _btService.sendCommand('ATCRA7E8');
+    for (final cmd in [
+      'ATZ', 'ATE0', 'ATL0', 'ATS0', 'ATH0', 'ATSP6',
+      'ATAL', 'ATCAF1', 'ATSH7E0', 'ATCRA7E8', 'ATFCSH7E0', 'ATFCSD300000', 'ATFCSM1'
+    ]) {
+      await _btService.sendCommand(cmd, timeoutMs: cmd == 'ATZ' ? 1800 : 500);
+    }
 
+    // Паспорт ЭБУ (0904)
+    String ecuId = state.ecuId;
+    final idBytes = ObdParser.extractBytes(await _btService.sendCommand('0904', timeoutMs: 1600), '4904');
+    if (idBytes != null && idBytes.isNotEmpty) {
+      final chars = idBytes.where((b) => b >= 32 && b <= 126).map((b) => String.fromCharCode(b)).join().trim();
+      if (chars.isNotEmpty) ecuId = chars;
+    }
+
+    // Определение KWP (1081) vs UDS (1003)
+    bool isUds = false;
     final r81 = await _btService.sendCommand('1081', timeoutMs: 800);
     if (!r81.replaceAll(' ', '').contains('5081')) {
       final r03 = await _btService.sendCommand('1003', timeoutMs: 800);
-      if (r03.replaceAll(' ', '').contains('5003')) _isUdsM86 = true;
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} else {
-      _isUdsM86 = false;
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
+      if (r03.replaceAll(' ', '').contains('5003')) isUds = true;
+    }
+    
+    final ecuType = _detectEcuType(ecuId);
 
-    state = state.copyWith(isConnected: true, connectedDevice: macAddress);
+    state = state.copyWith(
+      isConnected: true,
+      connectedDevice: macAddress,
+      isUds: isUds,
+      isUdsM86: isUds,
+      ecuId: ecuId,
+      ecuType: ecuType,
+      statusText: 'На связи · $ecuId · ${isUds ? "UDS" : "KWP"}',
+    );
+    
+    _logNuance(
+      'session_start',
+      'Сессия открыта',
+      'Протокол: ${isUds ? "UDS" : "KWP-CAN"} · Калибровка: $ecuId',
+      NuanceSeverity.info,
+    );
     return true;
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
   }
-}
+  
+  String _detectEcuType(String id) {
+    final upper = id.toUpperCase();
+    if (upper.contains('I785')) return 'Итэлма М86 (1.8л · UDS)';
+    if (upper.contains('765') || upper.contains('M86') || upper.contains('I86')) {
+      return 'Итэлма М86 (1.6л · UDS)';
+    }
+    if (upper.contains('M74')) return 'Итэлма М74';
+    if (upper.contains('ME17')) return 'Bosch ME17.9.7';
+    return 'ЭБУ не определён';
+  }
 
   void startPolling() {
     if (!state.isConnected || state.isPolling) return;
     state = state.copyWith(isPolling: true);
-
-    _pollTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) async {
-      await _pollCycle();
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
+    _runPollingLoop();
   }
-});
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
 
   void stopPolling() {
-    _pollTimer?.cancel();
-    _pollTimer = null;
     state = state.copyWith(isPolling: false);
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
   }
-}
 
-  // ДЛЯ СНИФФЕРА: Останавливаем опрос и ждем завершения текущей команды
+  void resetTrip() {
+    tripCalculator.reset();
+    state = state.copyWith();
+  }
+  
+  Future<void> disconnect() async {
+    stopPolling();
+    await _btService.disconnect();
+    state = state.copyWith(isConnected: false, isPolling: false);
+  }
+
   Future<void> pauseForSniffer() async {
-    _pollTimer?.cancel();
-    _pollTimer = null;
-    while (_isPollingBusy) {
+    stopPolling();
+    while (_isCycleBusy) {
       await Future.delayed(const Duration(milliseconds: 50));
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
+    }
   }
-}
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
 
   void resumeAfterSniffer() {
-    if (state.isConnected && !state.isPolling) {
-      startPolling();
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
+    if (state.isConnected && !state.isPolling) startPolling();
   }
-}
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
+  
+  Future<String> sendCommandForSniffer(String cmd) async {
+    return await _btService.sendCommand(cmd, timeoutMs: 1600);
   }
-}
 
-  Future<void> _pollCycle() async {
-    if (_isPollingBusy || !state.isConnected || _ecuProfile == null) return;
-    _isPollingBusy = true;
+  Future<void> _runPollingLoop() async {
+    while (state.isPolling && _btService.isConnected) {
+      if (_isCycleBusy) {
+        await Future.delayed(const Duration(milliseconds: 40));
+        continue;
+      }
+      _isCycleBusy = true;
 
-    try {
-      final updatedData = Map<String, double>.from(state.liveData);
-
-      // 1. Читаем ПЕРВЫЙ блок (Обороты, Температура, Дроссель)
-      final block1 = _ecuProfile!.blocks[0];
-      final cmd1 = _isUdsM86 ? block1.udsCommand : block1.kwpCommand;
-      final res1 = await _btService.sendCommand(cmd1, timeoutMs: 1000);
-      final prefix1 = _isUdsM86 ? '622001' : '6101';
-      final bytes1 = ObdParser.extractBytes(res1, prefix1);
-
-      if (bytes1 != null && bytes1.isNotEmpty) {
-        for (final param in block1.parameters) {
-          final val = param.decode(bytes1);
-          if (val != null) updatedData[param.id] = val;
-          Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-      // 2. Читаем ВТОРОЙ блок (Пропуски, Напряжение УДК)
-      if (_ecuProfile!.blocks.length > 1) {
-        final block2 = _ecuProfile!.blocks[1];
-        final cmd2 = _isUdsM86 ? block2.udsCommand : block2.kwpCommand;
-        final res2 = await _btService.sendCommand(cmd2, timeoutMs: 1000);
-        final prefix2 = _isUdsM86 ? '622002' : '6102';
-        final bytes2 = ObdParser.extractBytes(res2, prefix2);
-
-        if (bytes2 != null && bytes2.isNotEmpty) {
-          for (final param in block2.parameters) {
-            final val = param.decode(bytes2);
-            if (val != null) updatedData[param.id] = val;
-            Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-          Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-      // 2.5. Читаем УДК и ДДК (стандартные OBD-II PID)
-      final resO2 = await _btService.sendCommand('0114', timeoutMs: 800);
-      final bytesO2 = ObdParser.extractBytes(resO2, '4114');
-      if (bytesO2 != null && bytesO2.isNotEmpty) {
-        updatedData['udk_volt'] = bytesO2[0] / 200.0;
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-      final resO2b = await _btService.sendCommand('0115', timeoutMs: 800);
-      final bytesO2b = ObdParser.extractBytes(resO2b, '4115');
-      if (bytesO2b != null && bytesO2b.isNotEmpty) {
-        updatedData['ddk_volt'] = bytesO2b[0] / 200.0;
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-      // 3. Читаем СКОРОСТЬ для БК (стандартный OBD2 PID 010D)
-      final resSpeed = await _btService.sendCommand('010D', timeoutMs: 800);
-      final bytesSpeed = ObdParser.extractBytes(resSpeed, '410D');
-      if (bytesSpeed != null && bytesSpeed.isNotEmpty) {
-        updatedData['speed'] = bytesSpeed[0].toDouble(); // км/ч
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-      // 4. Кормим данные в БК
-      tripCalculator.update(
-        rpm: updatedData['rpm']?.toInt() ?? 0,
-        speedKmh: updatedData['speed'] ?? 0.0,
-        airMassKgH: (updatedData['map'] ?? 35.0) * (updatedData['rpm'] ?? 840.0) * 0.00025,
-        tpsPct: updatedData['tps'] ?? 0.0,
-        isDfcoActive: false,
-        stftPct: updatedData['stft'] ?? 0.0,
-        ltftPct: updatedData['ltft'] ?? 0.0,
-      );
-
-      // РАСЧЕТ МАТРИЦЫ КОРРЕКЦИЙ
-      final rpm = updatedData['rpm'] ?? 0;
-      final tps = updatedData['tps'] ?? 0;
-      final stft = updatedData['stft'];
-      final ltft = updatedData['ltft'];
-
-      if (stft != null && ltft != null && rpm > 0 && tps < 70) {
-        if (rpm >= 740 && rpm <= 960 && tps <= 4.5) _bins['idle']!.addSample(stft, ltft);
-        else if (rpm > 1600 && tps <= 12.0) _bins['low']!.addSample(stft, ltft);
-        else if (rpm >= 1300 && rpm <= 3400 && tps > 4.5 && tps <= 35.0) _bins['part']!.addSample(stft, ltft);
-        else if (tps > 35.0) _bins['high']!.addSample(stft, ltft);
+      try {
+        final updatedData = Map<String, double>.from(state.liveData);
+        final updatedTrace1 = List<double>.from(state.trace1);
+        final updatedTrace2 = List<double>.from(state.trace2);
+        String lastRawBlock = state.rawLastBlock1;
         
-        final medians = {
-          'idle': _bins['idle']!.median,
-          'low': _bins['low']!.median,
-          'part': _bins['part']!.median,
-          'high': _bins['high']!.median,
-          Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-};
-        state = state.copyWith(trimMedians: medians);
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
+        // P0-2: TesterPresent каждые ~2 сек
+        if (_cycle % 5 == 0) {
+          await _btService.sendCommand(state.isUds ? '3E00' : '3E', timeoutMs: 500);
+        }
 
-      // ЛОГИРОВАНИЕ АНОМАЛИЙ
-      if (updatedData['ect'] != null && updatedData['ect']! > 103) {
-        _logNuance('overheat', 'Перегрев ОЖ', 'Температура ${updatedData['ect']!.toInt()  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}°C > 103°C', NuanceSeverity.critical);
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
+        // 1. Напряжение бортсети (ATRV)
+        final rVolt = await _btService.sendCommand('ATRV', timeoutMs: 500);
+        final mVolt = RegExp(r'(\d+[.,]\d+)').firstMatch(rVolt);
+        if (mVolt != null) {
+          final v = double.tryParse(mVolt.group(1)!.replaceAll(',', '.'));
+          if (v != null && v > 4.5 && v < 18.5) {
+            updatedData['volt'] = v;
+            final minV = updatedData['min_volt'];
+            if (minV == null || v < minV) updatedData['min_volt'] = v;
+          }
+        }
+        if (!state.isPolling) break;
 
-      // Логирование коррекций
-      if (updatedData['stft'] != null && updatedData['stft']!.abs() > 15) {
-        _logNuance('trim_high', 'Коррекция STFT > 15%', 'STFT: ${updatedData['stft']!.toStringAsFixed(1)  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}%', NuanceSeverity.warning);
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-      
-      // Логирование просадки АКБ
-      if (updatedData['volt'] != null && updatedData['volt']! < 10.5 && updatedData['volt']! > 5.0) {
-        _logNuance('volt_low', 'Просадка АКБ', 'Напряжение: ${updatedData['volt']!.toStringAsFixed(2)  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} В', NuanceSeverity.critical);
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
+        // 2. Базовые быстрые PID (гарантированно работают на I765BJ56v3)
+        final bRpm = ObdParser.extractBytes(await _btService.sendCommand('010C', timeoutMs: 600), '410C');
+        if (bRpm != null && bRpm.length >= 2) {
+          updatedData['rpm'] = (((bRpm[0] * 256) + bRpm[1]) ~/ 4).toDouble();
+        } else if (bRpm == null) {
+            _consecutiveErrors++;
+        }
 
-      // Обновляем график УДК
-      final updatedTrace1 = List<double>.from(state.trace1);
-      if (updatedData.containsKey('udk_volt')) {
-        updatedTrace1.add(updatedData['udk_volt']!);
-        if (updatedTrace1.length > 100) updatedTrace1.removeAt(0);
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
+        final bStft = ObdParser.extractBytes(await _btService.sendCommand('0106', timeoutMs: 600), '4106');
+        if (bStft != null && bStft.isNotEmpty) {
+          updatedData['stft'] = (bStft[0] - 128) * 100.0 / 128.0;
+        }
 
-      // Обновляем график ДДК
-      final updatedTrace2 = List<double>.from(state.trace2);
-      if (updatedData.containsKey('ddk_volt')) {
-        updatedTrace2.add(updatedData['ddk_volt']!);
-        if (updatedTrace2.length > 100) updatedTrace2.removeAt(0);
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
+        final bLtft = ObdParser.extractBytes(await _btService.sendCommand('0107', timeoutMs: 600), '4107');
+        if (bLtft != null && bLtft.isNotEmpty) {
+          updatedData['ltft'] = (bLtft[0] - 128) * 100.0 / 128.0;
+        }
 
-      state = state.copyWith(liveData: updatedData, trace1: updatedTrace1, trace2: updatedTrace2);
+        if (_cycle % 2 == 0) {
+          final bEct = ObdParser.extractBytes(await _btService.sendCommand('0105', timeoutMs: 600), '4105');
+          if (bEct != null && bEct.isNotEmpty) {
+            final ectRaw = bEct[0] - 40;
+            if (ectRaw > -20 && ectRaw < 130) {
+              updatedData['ect'] = ectRaw.toDouble();
+            }
+          }
 
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} finally {
-      _isPollingBusy = false;
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
+          final bTps = ObdParser.extractBytes(await _btService.sendCommand('0111', timeoutMs: 600), '4111');
+          if (bTps != null && bTps.isNotEmpty) updatedData['tps'] = bTps[0] * 100.0 / 255.0;
 
-  // Чтение реальных кодов ошибок
-  Future<List<String>> readDtcs() async {
-    List<String> foundCodes = [];
-    if (!state.isConnected) return foundCodes;
+          final bO2S1 = ObdParser.extractBytes(await _btService.sendCommand('0114', timeoutMs: 600), '4114');
+          if (bO2S1 != null && bO2S1.isNotEmpty) {
+            final v1 = bO2S1[0] / 200.0;
+            updatedData['udk'] = v1;
+            updatedTrace1.add(v1);
+            if (updatedTrace1.length > 80) updatedTrace1.removeAt(0);
+          }
+
+          final bO2S2 = ObdParser.extractBytes(await _btService.sendCommand('0115', timeoutMs: 600), '4115');
+          if (bO2S2 != null && bO2S2.isNotEmpty) {
+            final v2 = bO2S2[0] / 200.0;
+            updatedData['ddk'] = v2;
+            updatedTrace2.add(v2);
+            if (updatedTrace2.length > 80) updatedTrace2.removeAt(0);
+          }
+        } else {
+          final bSpd = ObdParser.extractBytes(await _btService.sendCommand('010D', timeoutMs: 600), '410D');
+          if (bSpd != null && bSpd.isNotEmpty) updatedData['speed'] = bSpd[0].toDouble();
+
+          final bMap = ObdParser.extractBytes(await _btService.sendCommand('010B', timeoutMs: 600), '410B');
+          if (bMap != null && bMap.isNotEmpty) {
+            updatedData['map'] = bMap[0].toDouble();
+          } else {
+            final bLoad = ObdParser.extractBytes(await _btService.sendCommand('0104', timeoutMs: 600), '4104');
+            if (bLoad != null && bLoad.isNotEmpty) {
+              final loadPct = bLoad[0] * 100.0 / 255.0;
+              updatedData['load'] = loadPct;
+              updatedData['map'] = (loadPct * 0.95 + 12.0).roundToDouble().clamp(20.0, 105.0);
+            }
+          }
+
+          // 3. Опрос расширенного блока по JSON-профилю (222001 / 2101)
+          if (_ecuProfile != null && _ecuProfile!.blocks.isNotEmpty) {
+            final block = _ecuProfile!.blocks.first;
+            final cmd = state.isUds ? block.udsCommand : block.kwpCommand;
+            final prefix = state.isUds ? '62${block.udsCommand.substring(2)}' : '61${block.kwpCommand.substring(2)}';
+            final rawResponse = await _btService.sendCommand(cmd, timeoutMs: 1200);
+            lastRawBlock = rawResponse.replaceAll('\\n', ' ');
+            final bytes = ObdParser.extractBytes(rawResponse, prefix);
+            if (bytes != null && bytes.isNotEmpty) {
+              for (final param in block.parameters) {
+                final val = param.decode(bytes);
+                if (val != null) updatedData[param.id] = val;
+              }
+            }
+          }
+        }
+
+        // 4. Реальный расчёт массового расхода воздуха и обновление TripCalculator
+        final rpm = updatedData['rpm']?.toInt() ?? 0;
+        final mapKpa = updatedData['map'] ?? 35.0;
+        final iatK = (updatedData['iat'] ?? 30.0) + 273.15;
+        final cyclicAir = (mapKpa * 3.05 * (293.15 / iatK)).clamp(40.0, 520.0);
+        final airMassKgH = rpm > 300 ? ((cyclicAir * rpm * 2 * 60) / 1000000.0).clamp(1.0, 180.0) : 0.0;
+        updatedData['air_mass_kgh'] = airMassKgH;
+
+        final tpsPct = updatedData['tps'] ?? 0.0;
+        final isDfco = rpm > 1500 && tpsPct < 2.0;
+
+        tripCalculator.update(
+          rpm: rpm,
+          speedKmh: updatedData['speed'] ?? 0.0,
+          airMassKgH: airMassKgH,
+          tpsPct: tpsPct,
+          isDfcoActive: isDfco,
+          stftPct: updatedData['stft'] ?? 0.0,
+          ltftPct: updatedData['ltft'] ?? 0.0,
+        );
+
+        _consecutiveErrors = 0;
+        _cycle++;
+        state = state.copyWith(
+          liveData: updatedData,
+          trace1: updatedTrace1,
+          trace2: updatedTrace2,
+          rawLastBlock1: lastRawBlock,
+        );
+      } catch (e) {
+        _consecutiveErrors++;
+        if (_consecutiveErrors >= 3) {
+          stopPolling();
+          state = state.copyWith(isConnected: false, lastError: 'Связь потеряна');
+          _logNuance('bt_drop', 'Обрыв Bluetooth', 'Три цикла опроса завершились ошибкой', NuanceSeverity.critical);
+        }
+      } finally {
+        _isCycleBusy = false;
+        // Даем небольшую паузу между циклами
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+    }
+  }
+
+  // Инженерный Сниффер UDS / KWP
+  Future<void> runM86HexSniffer() async {
+    if (state.isRunningSniffer || !state.isConnected) return;
+    final wasPolling = state.isPolling;
+    stopPolling();
+    while (_isCycleBusy) {
+      await Future.delayed(const Duration(milliseconds: 30));
+    }
+
+    state = state.copyWith(isRunningSniffer: true, snifferDump: 'Опрос регистров М86...');
 
     try {
-      // Пробуем стандартный OBD2 запрос (03), если не выйдет — шлем UDS (190208)
-      String response = await _btService.sendCommand('03', timeoutMs: 2000);
-      List<int>? bytes = ObdParser.extractBytes(response, '43');
+      final sb = StringBuffer();
+      sb.writeln('=== ДАМП ОТВЕТОВ ЭБУ М86 (v3.0.0) ===');
+      final r1081 = await _btService.sendCommand('1081', timeoutMs: 900);
+      final r1003 = await _btService.sendCommand('1003', timeoutMs: 900);
+      sb.writeln('1081 (KWP): $r1081 | 1003 (UDS): $r1003');
 
-      if (bytes == null) {
-        // Если OBD2 не ответил, пробуем UDS
-        response = await _btService.sendCommand('190208', timeoutMs: 2000);
-        bytes = ObdParser.extractBytes(response, '590208');
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
+      final kwpOk = r1081.replaceAll(' ', '').contains('5081');
+      final udsOk = r1003.replaceAll(' ', '').contains('5003');
+      final isUds = !kwpOk && udsOk ? true : state.isUds;
+      sb.writeln('=> Протокол: ${isUds ? "UDS" : "KWP-CAN"}');
 
-      if (bytes != null && bytes.isNotEmpty) {
-        // Первый байт — количество ошибок. Дальше идут пары байтов (сами коды).
-        int count = bytes[0];
-        for (int i = 0; i < count; i++) {
-          if (bytes.length >= 2 + (i * 2)) {
-            int b1 = bytes[1 + (i * 2)];
-            int b2 = bytes[2 + (i * 2)];
-            if (b1 == 0 && b2 == 0) continue; // Пустые байты
-            
-            // Расшифровка DTC (P, C, B, U)
-            const typeChars = ['P', 'C', 'B', 'U'];
-            final type = typeChars[(b1 >> 6) & 0x03];
-            final code = '$type${((b1 >> 4) & 0x03)  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
+      final cmds = <String>[
+        '0904', '0100', '010B', '0104', '012E',
+        if (isUds) ...[
+          '222001', '222002', '222003',
+          '220401', '220402', '220403',
+          '22F187', '22F188', '22F190',
+        ] else ...[
+          '2101', '2102', '2103',
+        ]
+      ];
+
+      for (final cmd in cmds) {
+        await _btService.sendCommand(isUds ? '3E00' : '3E', timeoutMs: 400, postDelayMs: 30);
+        final r = await _btService.sendCommand(cmd, timeoutMs: 1600, postDelayMs: 120);
+        sb.writeln('$cmd => ${r.replaceAll('\\n', ' | ')}');
+      }
+
+      final dumpStr = sb.toString().trim();
+      await Clipboard.setData(ClipboardData(text: dumpStr));
+      state = state.copyWith(
+        isUds: isUds,
+        snifferDump: '$dumpStr\\n\\n✅ Дамп скопирован в буфер обмена!',
+      );
+    } finally {
+      state = state.copyWith(isRunningSniffer: false);
+      if (wasPolling) startPolling();
+    }
   }
-}${(b1 & 0x0F).toRadixString(16).toUpperCase()  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
+
+  // Генератор ИИ-Снапшота («Умный промпт»)
+  Future<String> copyAiSnapshotPrompt() async {
+    final d = state.liveData;
+    final sb = StringBuffer();
+    sb.writeln('Ты — ведущий инженер-диагност ЭСУД АвтоВАЗ (ТИ 3100.25100.12056).');
+    sb.writeln('Проанализируй диагностический снапшот автомобиля Lada Vesta (VestaScan Pro v3.0):');
+    sb.writeln('• Калибровка ЭБУ: ${state.ecuId} | Протокол: ${state.isUds ? "UDS (1003)" : "KWP (1081)"}');
+    sb.writeln('• Обороты: ${d['rpm']?.toInt() ?? "---"} об/мин | Темп. ОЖ: ${d['ect']?.toInt() ?? "---"} °C');
+    sb.writeln('• ДАД/Нагрузка: ${d['map']?.toInt() ?? "---"} кПа (Нагрузка 0104: ${d['load']?.toStringAsFixed(1) ?? "---"}%) | Дроссель: ${d['tps']?.toStringAsFixed(1) ?? "---"}%');
+    sb.writeln('• Бортсеть: ${d['volt']?.toStringAsFixed(2) ?? "---"} В (Мин. за сессию: ${d['min_volt']?.toStringAsFixed(2) ?? "---"} В)');
+    sb.writeln('• Топливные коррекции: STFT = ${d['stft']?.toStringAsFixed(1) ?? "---"}% | LTFT = ${d['ltft']?.toStringAsFixed(1) ?? "---"}%');
+    sb.writeln('• Датчики кислорода: УДК (ДК1) = ${d['udk']?.toStringAsFixed(2) ?? "---"} В | ДДК (ДК2) = ${d['ddk']?.toStringAsFixed(2) ?? "---"} В');
+    sb.writeln('• Расчёт БК: Воздух ~${d['air_mass_kgh']?.toStringAsFixed(1) ?? "---"} кг/ч | Часовой расход ${tripCalculator.instantFuelLpH.toStringAsFixed(2)} л/ч | Пробег ${tripCalculator.totalDistanceKm.toStringAsFixed(2)} км | Средний ${tripCalculator.averageConsumptionL100Km.toStringAsFixed(1)} л/100км');
+    sb.writeln('• Последний ответ расширенного блока: ${state.rawLastBlock1}');
+    sb.writeln('\\nЗадача: 1) Оцени параметры работы ДВС, впуска и топливной системы. 2) Укажи на отклонения от заводских норм. 3) Какие проверки выполнить далее?');
+
+    final text = sb.toString();
+    await Clipboard.setData(ClipboardData(text: text));
+    return text;
   }
-}${((b2 >> 4) & 0x0F).toRadixString(16).toUpperCase()  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
+  
+  // ===== ДЛЯ ЭКРАНА ОШИБОК (DTC) =====
+  Future<List<String>> readDtcs() async {
+    final codes = <String>{};
+    for (final mode in ['03', '07']) {
+      final resp = await _btService.sendCommand(mode, timeoutMs: 2000);
+      final b = ObdParser.extractBytes(resp, mode == '03' ? '43' : '47');
+      if (b == null || b.length < 3) continue;
+
+      final cnt = b[0];
+      final usable = (cnt > 0 && cnt <= 40 && b.length >= 1 + cnt * 2)
+          ? cnt
+          : (b.length - 1) ~/ 2;
+
+      for (int i = 0; i < usable; i++) {
+        final b1 = b[1 + i * 2];
+        final b2 = b[2 + i * 2];
+        if (b1 == 0 && b2 == 0) continue;
+        const types = ['P', 'C', 'B', 'U'];
+        final t = types[(b1 >> 6) & 0x03];
+        final code = '$t${((b1 >> 4) & 0x03)}${(b1 & 0x0F).toRadixString(16).toUpperCase()}${((b2 >> 4) & 0x0F).toRadixString(16).toUpperCase()}${(b2 & 0x0F).toRadixString(16).toUpperCase()}';
+        codes.add(code);
+      }
+    }
+    state = state.copyWith(dtcList: codes.toList());
+    return codes.toList();
   }
-}${(b2 & 0x0F).toRadixString(16).toUpperCase()  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}';
-            foundCodes.add(code);
-            Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-          Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} catch (e) {
-      // Ошибка чтения
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-    return foundCodes;
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
 
   Future<void> clearDtcs() async {
-    if (!state.isConnected) return;
-    await _btService.sendCommand('04', timeoutMs: 1500);
-    await _btService.sendCommand('14FFFFFF', timeoutMs: 1500);
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
+    await _btService.sendCommand('04', timeoutMs: 2000);
+    state = state.copyWith(dtcList: []);
+    _logNuance('dtc_clear', 'Сброс DTC', 'Mode 04 выполнен', NuanceSeverity.info);
   }
-}
 
-  Future<List<Map<String, String>>> getBluetoothDevices() async {
-    return await _btService.getPairedDevices();
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
+  Future<Map<String, double?>> getFreezeFrame(String code) async {
+    int? rpm, ect, map, speed;
+    double? stft, ltft, volt;
 
-  // Флаг для экстренной остановки теста
-  bool _abortTest = false;
-  
-  void abortActuatorTest() {
-    _abortTest = true;
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
+    final rRpm = ObdParser.extractBytes(await _btService.sendCommand('020C00', timeoutMs: 900), '420C');
+    if (rRpm != null && rRpm.length >= 3) rpm = ((rRpm[1] * 256) + rRpm[2]) ~/ 4;
 
-  Future<void> runActuatorTest({
-    required String testName,
-    required String cmdOn,
-    required String cmdOff,
-    required int holdSeconds,
-    bool requireEngineRunning = false,
-    bool requireEngineStopped = false,
-    bool isOneShot = false,
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}) async {
-    if (!state.isConnected) return;
+    final rEct = ObdParser.extractBytes(await _btService.sendCommand('020500', timeoutMs: 900), '4205');
+    if (rEct != null && rEct.length >= 2) ect = rEct[1] - 40;
 
-    // 1. ПРОВЕРКА УСЛОВИЙ БЕЗОПАСНОСТИ
-    final rpm = state.liveData['rpm']?.toInt() ?? 0;
-    if (requireEngineRunning && rpm < 500) {
-      throw Exception('Двигатель не заведен! Тест невозможен.');
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-    if (requireEngineStopped && rpm > 0) {
-      throw Exception('Двигатель работает! Заглушите мотор перед тестом.');
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
+    final rMap = ObdParser.extractBytes(await _btService.sendCommand('020B00', timeoutMs: 900), '420B');
+    if (rMap != null && rMap.length >= 2) map = rMap[1];
 
-    _abortTest = false;
-    bool commandWasSent = false;
+    final rStft = ObdParser.extractBytes(await _btService.sendCommand('020600', timeoutMs: 900), '4206');
+    if (rStft != null && rStft.length >= 2) stft = (rStft[1] - 128) * 100.0 / 128.0;
 
-    try {
-      // 2. ОТКРЫВАЕМ СЕССИЮ
-      await _btService.sendCommand(_isUdsM86 ? '1003' : '1081', timeoutMs: 1000);
-      
-      // 3. ОТПРАВЛЯЕМ ON (С проверкой на NRC)
-      final respOn = await _btService.sendCommand(cmdOn, timeoutMs: 1500);
-      
-      // Если ЭБУ вернуло Negative Response (7F) — тест не запустился
-      if (respOn.contains('7F') || respOn.contains('ERR')) {
-        throw Exception('ЭБУ отклонил команду: $respOn');
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-      
-      commandWasSent = true;
+    final rLtft = ObdParser.extractBytes(await _btService.sendCommand('020700', timeoutMs: 900), '4207');
+    if (rLtft != null && rLtft.length >= 2) ltft = (rLtft[1] - 128) * 100.0 / 128.0;
 
-      // 4. ДЕРЖИМ (с проверкой на отмену и потерю связи)
-      if (!isOneShot) {
-        for (int i = 0; i < holdSeconds; i++) {
-          await Future.delayed(const Duration(seconds: 1));
-          if (!state.isConnected) {
-            throw Exception('Потеря связи с ЭБУ во время теста!');
-            Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-          if (_abortTest) {
-            throw Exception('Тест отменен пользователем.');
-            Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-          Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
+    final rSpeed = ObdParser.extractBytes(await _btService.sendCommand('020D00', timeoutMs: 900), '420D');
+    if (rSpeed != null && rSpeed.length >= 2) speed = rSpeed[1];
 
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} finally {
-      // 5. ГАРАНТИРОВАННОЕ ОТКЛЮЧЕНИЕ (выполняется ВСЕГДА)
-      if (commandWasSent && !isOneShot) {
-        try {
-          await _btService.sendCommand(cmdOff, timeoutMs: 1500);
-          // Дублируем по обоим протоколам для надежности
-          if (_isUdsM86) {
-            await _btService.sendCommand(cmdOff, timeoutMs: 1000);
-            Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-          Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} catch (_) {
-          // Если даже тут связь упала — мы ничего не можем сделать, но пробуем
-          Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-      // Всегда возвращаем стандартную сессию
-      try {
-        await _btService.sendCommand('1001', timeoutMs: 800);
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} catch (_) {  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
+    final rVolt = ObdParser.extractBytes(await _btService.sendCommand('024200', timeoutMs: 900), '4242');
+    if (rVolt != null && rVolt.length >= 3) volt = ((rVolt[1] * 256) + rVolt[2]) / 1000.0;
 
-  // Универсальный сниффер: опрашивает ЭБУ и возвращает сырые HEX-ответы
-  Future<String> runSnifferDump() async {
-    if (!state.isConnected) return 'ЭБУ не подключен';
+    return {
+      'rpm': rpm?.toDouble(),
+      'ect': ect?.toDouble(),
+      'map': map?.toDouble(),
+      'speed': speed?.toDouble(),
+      'stft': stft,
+      'ltft': ltft,
+      'volt': volt,
+    };
+  }
 
-    final sb = StringBuffer();
-    sb.writeln('=== ДАМП ОТВЕТОВ ЭБУ ===');
-    sb.writeln('Протокол: ${_isUdsM86 ? "UDS (22XX)" : "KWP (21XX)"  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}\n');
+  // ===== ДЛЯ ЖУРНАЛА =====
+  void _logNuance(String id, String title, String desc, NuanceSeverity sev, {int cooldownSec = 25}) {
+    final now = DateTime.now();
+    if (_lastNuanceTimes.containsKey(id) &&
+        now.difference(_lastNuanceTimes[id]!).inSeconds < cooldownSec) {
+      return;
+    }
+    _lastNuanceTimes[id] = now;
 
-    // Список команд для проверки
-    final commands = [
-      // Стандартные OBD-II (для БК)
-      ('0100', 'Поддерживаемые PID'),
-      ('0105', 'Температура ОЖ'),
-      ('010B', 'ДАД впуска (MAP)'),
-      ('010C', 'Обороты двигателя'),
-      ('010D', 'Скорость'),
-      ('0110', 'MAF (воздух)'),
-      ('0111', 'Дроссель'),
-      ('0114', 'УДК'),
-      // Расширенные М86
-      ('222001', 'UDS блок 1 (основной)'),
-      ('222002', 'UDS блок 2 (АЦП)'),
-      ('22F190', 'VIN автомобиля'),
-    ];
+    final currentSnapshot = <String, String>{
+      if (state.liveData['rpm'] != null) 'RPM': '${state.liveData['rpm']}',
+      if (state.liveData['ect'] != null) 'ОЖ': '${state.liveData['ect']}°C',
+      if (state.liveData['volt'] != null) 'Сеть': '${state.liveData['volt']}В',
+    };
 
-    for (final cmd in commands) {
-      try {
-        // TesterPresent для поддержки сессии (только для UDS)
-        if (_isUdsM86) {
-          await _btService.sendCommand('3E00', timeoutMs: 400);
-          Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
+    final list = List<NuanceEvent>.from(state.nuances);
+    final idx = list.indexWhere((e) => e.id == id);
+    if (idx != -1) {
+      final ex = list.removeAt(idx);
+      ex.hzCount += 1;
+      ex.timestamp = now;
+      ex.severity = sev;
+      ex.title = title;
+      ex.description = desc;
+      ex.snapshot = currentSnapshot;
+      list.insert(0, ex);
+    } else {
+      list.insert(0, NuanceEvent(
+        id: id,
+        timestamp: now,
+        severity: sev,
+        title: title,
+        description: desc,
+        snapshot: currentSnapshot,
+      ));
+    }
+    if (list.length > 500) list.removeRange(500, list.length);
+    state = state.copyWith(nuances: list);
   }
-}
-        
-        final resp = await _btService.sendCommand(cmd.$1, timeoutMs: 1500);
-        final cleanResp = resp.replaceAll('\n', ' ').replaceAll('\r', ' ');
-        
-        final status = cleanResp.contains('7F') || cleanResp.isEmpty || cleanResp.contains('NO DATA')
-            ? '❌ НЕ ОТВЕЧАЕТ'
-            : '✅ ОТВЕТ';
-        
-        sb.writeln('${cmd.$1  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} (${cmd.$2  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}) → $status');
-        sb.writeln('   $cleanResp\n');
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} catch (e) {
-        sb.writeln('${cmd.$1  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} (${cmd.$2  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}) → ОШИБКА: $e\n');
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
 
-    return sb.toString();
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
+  void logNuancePublic(String id, String title, String desc, NuanceSeverity sev) {
+    _logNuance(id, title, desc, sev);
   }
-}
 
-  Future<String> runModuleSniffer(String moduleName, String txId, String rxId) async {
-    final sb = StringBuffer();
-    sb.writeln('=== СНИФФЕР БЛОКА: $moduleName (TX: $txId, RX: $rxId) ===');
-    
-    // Переключаемся на нужный блок
-    await _btService.switchModule(txId, rxId);
-    
-    // Список популярных DID, где может лежать пробег, топливо или VIN
-    final List<String> testDids = [
-      '22F190', // VIN (стандартный UDS)
-      '22F187', // Part Number
-      '22F18C', // Серийный номер
-      '22DD01', // Часто пробег у Renault/ВАЗ
-      '22DD02',
-      '222001', // Общие данные
-      '222002',
-      '222003',
-      '220401',
-      '220402'
-    ];
+  void clearJournal() {
+    state = state.copyWith(nuances: []);
+  }
 
-    for (final did in testDids) {
-      final resp = await _btService.sendCommand(did, timeoutMs: 1000);
-      final cleanResp = resp.replaceAll('\n', ' | ');
-      
-      // Если ответ не содержит ошибку "7F" (отказ), значит мы нашли данные!
-      if (!resp.contains('7F') && resp.isNotEmpty) {
-        sb.writeln('✅ $did => $cleanResp');
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} else {
-        sb.writeln('❌ $did => Отказ/Нет данных');
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-      await Future.delayed(const Duration(milliseconds: 100));
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-    
-    // Возвращаем ELM327 обратно на двигатель
-    await _btService.switchModule('7E0', '7E8');
-    
-    return sb.toString();
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-  // Адаптация дросселя
-  Future<String> runThrottleAdaptation(Function(String) onUpdate) async {
-    if (!state.isConnected) return 'ЭБУ не подключен';
-
-    // 1. Проверка условий
-    final rpm = state.liveData['rpm']?.toInt() ?? 0;
-    final ect = state.liveData['ect']?.toInt() ?? 0;
-    final tps = state.liveData['tps']?.toDouble() ?? 0.0;
-    
-    if (rpm > 0) return '⛔ СРЫВ: Двигатель должен быть заглушен!';
-    if (ect < 5 || ect > 100) return '⛔ СРЫВ: Температура ОЖ вне коридора 5..100°C!';
-    if (tps > 9.5) return '⛔ СРЫВ: Нажата педаль газа!';
-
-    final sw = Stopwatch()..start();
-    int lastEct = 0;
-
-    while (sw.elapsedMilliseconds < 30000) {
-      if (!state.isConnected) return '⛔ СРЫВ: Потеря связи с ЭБУ!';
-      
-      final rVolt = await _btService.sendCommand('ATRV', timeoutMs: 500);
-      final volt = double.tryParse(RegExp(r'(\d+\.\d+)').firstMatch(rVolt)?.group(1) ?? '12.0') ?? 12.0;
-      if (volt < 10.0) return '⛔ СРЫВ: Напряжение ниже 10.0 В!';
-
-      final rTps = await _btService.sendCommand('0111', timeoutMs: 500);
-      final tpsBytes = ObdParser.extractBytes(rTps, '4111');
-      if (tpsBytes != null && tpsBytes[0] * 100.0 / 255.0 > 9.5) return '⛔ СРЫВ: Педаль нажата!';
-
-      if (sw.elapsedMilliseconds - lastEct > 5000) {
-        final rEct = await _btService.sendCommand('0105', timeoutMs: 500);
-        final ectBytes = ObdParser.extractBytes(rEct, '4105');
-        if (ectBytes != null && (ectBytes[0] - 40) > 100) return '⛔ СРЫВ: ОЖ > 100°C!';
-        lastEct = sw.elapsedMilliseconds;
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-      onUpdate('Шаг 1/2: Осталось ${30 - (sw.elapsedMilliseconds ~/ 1000)  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} сек');
-      await Future.delayed(const Duration(milliseconds: 250));
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-    for (int i = 10; i > 0; i--) {
-      onUpdate('Шаг 2/2: ВЫКЛЮЧИТЕ ЗАЖИГАНИЕ! Ждем главное реле... $i сек');
-      await Future.delayed(const Duration(seconds: 1));
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-    return '✅ Адаптация дросселя успешно выполнена!';
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-  // Чтение стоп-кадра (Freeze Frame) для конкретной ошибки
-  Future<Map<String, String>> getFreezeFrame(String dtcCode) async {
-    final result = <String, String>{  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-};
-    if (!state.isConnected) return result;
-
-    try {
-      // Стандартные запросы Mode 02 для М86
-      final Map<String, String> pids = {
-        '020C00': 'Обороты',     // Префикс ответа: 420C
-        '020500': 'Темп. ОЖ',    // Префикс ответа: 4205
-        '020B00': 'ДАД впуск',   // Префикс ответа: 420B
-        '020600': 'STFT',        // Префикс ответа: 4206
-        '020700': 'LTFT',        // Префикс ответа: 4207
-        '020D00': 'Скорость',    // Префикс ответа: 420D
-        '024200': 'Бортсеть',    // Префикс ответа: 4242
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-};
-
-      for (final entry in pids.entries) {
-        final cmd = entry.key;
-        final label = entry.value;
-        final prefix = cmd.substring(0, 4); 
-        final expectedPrefix = '42${prefix.substring(2)  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}'; 
-
-        final resp = await _btService.sendCommand(cmd, timeoutMs: 1000);
-        final bytes = ObdParser.extractBytes(resp, expectedPrefix);
-
-        if (bytes != null && bytes.isNotEmpty) {
-          if (cmd == '020C00' && bytes.length >= 3) {
-            result[label] = '${((bytes[1] * 256) + bytes[2]) ~/ 4  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} об/мин';
-            Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} else if (cmd == '020500' && bytes.length >= 2) {
-            result[label] = '${bytes[1] - 40  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} °C';
-            Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} else if (cmd == '020B00' && bytes.length >= 2) {
-            result[label] = '${bytes[1]  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} кПа';
-            Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} else if (cmd == '020600' && bytes.length >= 2) {
-            result[label] = '${((bytes[1] - 128) * 100 / 128).toStringAsFixed(1)  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} %';
-            Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} else if (cmd == '020700' && bytes.length >= 2) {
-            result[label] = '${((bytes[1] - 128) * 100 / 128).toStringAsFixed(1)  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} %';
-            Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} else if (cmd == '020D00' && bytes.length >= 2) {
-            result[label] = '${bytes[1]  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} км/ч';
-            Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} else if (cmd == '024200' && bytes.length >= 3) {
-            result[label] = '${(((bytes[1] * 256) + bytes[2]) / 1000.0).toStringAsFixed(2)  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} В';
-            Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-          Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-        Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} catch (e) {
-      // Игнорируем ошибки чтения
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-    return result;
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-
-  // Экспорт журнала в CSV
   Future<String> exportJournalToCsv() async {
     final sb = StringBuffer();
-    
-    // Заголовок файла
-    sb.writeln('=== ЖУРНАЛ ДИАГНОСТИКИ (VestaScan Pro v2.0.0) ===');
-    sb.writeln('Дата экспорта: ${DateTime.now().toIso8601String()  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}');
-    sb.writeln('Всего событий: ${state.nuances.length  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}');
-    sb.writeln('Протокол: ${_isUdsM86 ? "UDS" : "KWP-CAN"  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}');
+    sb.writeln('=== VestaScan Pro · Экспорт ===');
+    sb.writeln('Устройство: ${state.connectedDevice}');
+    sb.writeln('ЭБУ: ${state.ecuType} · Калибровка: ${state.ecuId}');
+    sb.writeln('Протокол: ${state.isUds ? "UDS" : "KWP-CAN"}');
     sb.writeln('');
-    
-    // Заголовки колонок
-    sb.writeln('Time_ISO;Severity;Title;Description;HZ_Count;Snapshot');
-    
-    // Данные
+
+    sb.writeln('--- ЖУРНАЛ ---');
     for (final e in state.nuances) {
-      final snapshotStr = e.snapshot.entries
-          .map((entry) => '${entry.key  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}=${entry.value  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}')
-          .join(' | ');
-      sb.writeln(
-        '${e.timestamp.toIso8601String()  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-};'
-        '${e.severity.name.toUpperCase()  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-};'
-        '${e.title.replaceAll(';', ',')  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-};'
-        '${e.description.replaceAll(';', ',').replaceAll('\n', ' ')  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-};'
-        '${e.hzCount  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-};'
-        '$snapshotStr'
-      );
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-    
-    // Добавляем данные БК
+      sb.writeln('[${e.timeStr}] [HZ:${e.hzCount}] [${e.severity.name.toUpperCase()}] ${e.title}: ${e.description}');
+    }
+
     sb.writeln('');
-    sb.writeln('=== ДАННЫЕ ПОЕЗДКИ ===');
-    sb.writeln('Пробег: ${tripCalculator.totalDistanceKm.toStringAsFixed(2)  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} км');
-    sb.writeln('Средний расход: ${tripCalculator.averageConsumptionL100Km.toStringAsFixed(2)  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} л/100км');
-    sb.writeln('Потрачено топлива: ${tripCalculator.totalFuelLiters.toStringAsFixed(3)  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} л');
-    sb.writeln('Максимальная скорость: ${tripCalculator.maxSpeedKmh.toStringAsFixed(1)  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} км/ч');
-    
-    // Текущие живые данные
-    sb.writeln('');
-    sb.writeln('=== ТЕКУЩИЕ ДАННЫЕ ===');
-    sb.writeln('Обороты: ${state.liveData['rpm']?.toInt() ?? '---'  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} об/мин');
-    sb.writeln('ОЖ: ${state.liveData['ect']?.toInt() ?? '---'  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} °C');
-    sb.writeln('ДАД: ${state.liveData['map']?.toInt() ?? '---'  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} кПа');
-    sb.writeln('STFT: ${state.liveData['stft']?.toStringAsFixed(1) ?? '---'  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} %');
-    sb.writeln('LTFT: ${state.liveData['ltft']?.toStringAsFixed(1) ?? '---'  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} %');
-    
+    sb.writeln('--- ПАРАМЕТРЫ ---');
+    state.liveData.forEach((k, v) => sb.writeln('$k: $v'));
+
     final csvText = sb.toString();
-    
-    // 1. Копируем в буфер обмена
     await Clipboard.setData(ClipboardData(text: csvText));
-    
-    // 2. Сохраняем в файл
-    try {
-      final dir = await getApplicationDocumentsDirectory();
-      final filename = 'VestaScan_${DateTime.now().toIso8601String().replaceAll(':', '-').substring(0, 19)  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}.csv';
-      final file = File('${dir.path  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}/$filename');
-      await file.writeAsString(csvText);
-      return '✅ Экспортировано:\n${file.path  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}';
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-} catch (e) {
-      return '⚠️ В буфер скопировано, но файл не сохранен: $e';
-      Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-    Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
-  }
-}
-  Future<String> sendCommandForSniffer(String cmd) async {
-    return await _btService.sendCommand(cmd, timeoutMs: 1500);
+    return '✅ Скопировано в буфер обмена';
   }
 }
