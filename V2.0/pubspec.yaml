@@ -1,0 +1,28 @@
+name: vestascan_pro
+description: VestaScan Pro V2.0 - Lada Vesta diagnostic tool (M86/UDS)
+publish_to: 'none'
+version: 2.0.0+1
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_riverpod: ^2.5.1
+  flutter_bluetooth_classic_serial: 1.3.2
+  shimmer: ^3.0.0
+  google_fonts: ^6.2.1
+  shared_preferences: ^2.2.2
+  path_provider: ^2.1.2
+  url_launcher: ^6.2.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - lib/data/json_profiles/m86_uds.json

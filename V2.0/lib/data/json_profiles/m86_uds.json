@@ -1,0 +1,19 @@
+{
+  "id": "m86_uds",
+  "name": "Итэлма М86 (блок 220001, default session)",
+  "note": "Реверс по живому дампу 2026-10-29 (МОНИТОРИНГ 220001, газование): подтверждено — rpm@4 (2Б, /4), ect@54 (1Б, -40), ltft@27 ((A-128)*100/128); кандидаты — stft@22, volt@1 (/10). TBD: @3 (медленно растёт), @7 (УОЗ/дроссель?), @21 (нагрузка?), @33. 220001 читается в DEFAULT session (без 1003).",
+  "blocks": [
+    {
+      "name": "Блок 220001 (реверс 2026-10-29)",
+      "kwpCommand": "2101",
+      "udsCommand": "220001",
+      "parameters": [
+        { "id": "uds_rpm", "name": "Обороты (UDS)", "byteOffset": 4, "width": 2, "divisor": 4.0, "unit": "об/мин", "note": "подтверждено: совпадает с 010C" },
+        { "id": "uds_ect", "name": "ТОЖ (UDS)", "byteOffset": 54, "width": 1, "offset": -40.0, "unit": "°C", "note": "подтверждено: совпадает с 0105" },
+        { "id": "uds_ltft", "name": "LTFT (UDS)", "byteOffset": 27, "width": 1, "multiplier": 100.0, "divisor": 128.0, "offset": -100.0, "decimals": 1, "unit": "%", "note": "подтверждено: совпадает с 0107 (-3.9%)" },
+        { "id": "uds_stft", "name": "STFT (UDS)", "byteOffset": 22, "width": 1, "multiplier": 100.0, "divisor": 128.0, "offset": -100.0, "decimals": 1, "unit": "%", "note": "кандидат: диапазон совпадает с 0106" },
+        { "id": "uds_volt", "name": "Бортсеть (UDS)", "byteOffset": 1, "width": 1, "divisor": 10.0, "decimals": 1, "unit": "В", "note": "кандидат: 14.1–14.2 В" }
+      ]
+    }
+  ]
+}
