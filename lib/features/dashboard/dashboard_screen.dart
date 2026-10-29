@@ -296,7 +296,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               if (isPolling) {
                 obdNotifier.stopPolling();
               } else {
-                final devices = await ref.read(bluetoothServiceProvider).getPairedDevices();
+                final devices = await obdNotifier.getBluetoothDevices();
                 if (devices.isEmpty) {
                   if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -319,11 +319,11 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                         itemBuilder: (c, i) {
                           final d = devices[i];
                           return ListTile(
-                            title: Text(d.name.isNotEmpty ? d.name : 'Unknown', style: const TextStyle(color: Colors.white)),
-                            subtitle: Text(d.address, style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                            title: Text(d['name']?.isNotEmpty == true ? d['name']! : 'Unknown', style: const TextStyle(color: Colors.white)),
+                            subtitle: Text(d['address'] ?? '', style: const TextStyle(color: Colors.grey, fontSize: 11)),
                             onTap: () {
                               Navigator.pop(ctx);
-                              obdNotifier.connect(d.address).then((s) {
+                              obdNotifier.connect(d['address']!).then((s) {
                                 if (s) obdNotifier.startPolling();
                               });
                             },
