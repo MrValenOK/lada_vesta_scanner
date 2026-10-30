@@ -101,7 +101,9 @@ class _ScopePainter extends CustomPainter {
         ..strokeJoin = StrokeJoin.round;
 
       final path = Path();
-      final stepX = size.width / 99; // буфер до 100 точек
+      // Шаг по фактической ёмкости буфера (80 точек, pushTrace), не по 99:
+      // заполненный буфер занимает всю ширину (было ~80 % ширины).
+      final stepX = size.width / 79;
       for (int i = 0; i < trace.length; i++) {
         final x = i * stepX;
         final normalizedY = ((trace[i] - minVal) / range).clamp(0.0, 1.0);

@@ -1,12 +1,14 @@
-// lib/features/dashboard/widgets/dashboard_cards.dart — карточки дашборда.
-// Вынесено из dashboard_screen.dart (лимит 400 строк/файл). Цвета — только
-// токены AppColors.
+// lib/features/dashboard/widgets/dashboard_cards.dart — карточки дашборда:
+// подключение, поездка (БК), параметры М86 (UDS). Плашка датчика с нормами —
+// widgets/sensor_card.dart, паспорт ЭСУД — widgets/passport_card.dart
+// (выносы по лимиту 400 строк/файл). Цвета — только токены AppColors.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/spec_notes.dart';
 import '../../../core/theme.dart';
 import '../../../providers/obd_provider.dart';
-import '../../../services/trip_calculator.dart';
+import 'spec_sheet.dart';
 
 /// Карточка подключения: статус + Старт/Стоп (выбор устройства — в диалоге).
 class ConnectionCard extends ConsumerWidget {
@@ -16,7 +18,8 @@ class ConnectionCard extends ConsumerWidget {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  Future<void> _pickDeviceAndConnect(BuildContext context, WidgetRef ref) async {
+  Future<void> _pickDeviceAndConnect(
+      BuildContext context, WidgetRef ref) async {
     final devices = await ref.read(bluetoothServiceProvider).getPairedDevices();
     if (!context.mounted) return;
     if (devices.isEmpty) {
@@ -24,6 +27,13 @@ class ConnectionCard extends ConsumerWidget {
           'Нет спаренных Bluetooth-устройств. Спарьте ELM327 в настройках телефона!');
       return;
     }
+    // Автовыбор: последний успешный адаптер (П5) — первым в списке.
+    final last = ref.read(obdProvider.notifier).lastAdapterAddress;
+    final sorted = [...devices]..sort((a, b) {
+        if (a['address'] == last) return -1;
+        if (b['address'] == last) return 1;
+        return 0;
+      });
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -32,16 +42,18 @@ class ConnectionCard extends ConsumerWidget {
           width: double.maxFinite,
           child: ListView.builder(
             shrinkWrap: true,
-            itemCount: devices.length,
+            itemCount: sorted.length,
             itemBuilder: (c2, i) {
-              final d = devices[i];
+              final d = sorted[i];
+              final isLast = d['address'] == last;
               return ListTile(
-                title: Text(d.name.isNotEmpty ? d.name : 'Unknown'),
-                subtitle: Text(d.address,
+                title: Text(d['name'] ?? 'Unknown'),
+                subtitle: Text('${d['address'] ?? ''}'
+                    '${isLast ? ' · последний' : ''}',
                     style: Theme.of(ctx).textTheme.labelSmall),
                 onTap: () {
                   Navigator.pop(ctx);
-                  _connectAndStart(context, ref, d.address);
+                  _connectAndStart(context, ref, d['address']!, d['name']);
                 },
               );
             },
@@ -51,15 +63,18 @@ class ConnectionCard extends ConsumerWidget {
     );
   }
 
-  Future<void> _connectAndStart(
-      BuildContext context, WidgetRef ref, String address) async {
+  Future<void> _connectAndStart(BuildContext context, WidgetRef ref,
+      String address, String? name) async {
     final notifier = ref.read(obdProvider.notifier);
-    final ok = await notifier.connect(address);
+    final ok = await notifier.connect(address, name: name);
     if (!context.mounted) return;
     if (ok) {
       final st = ref.read(obdProvider);
-      _toast(context,
-          st.initOk ? 'Подключено · init OK · ${st.ecuId}' : 'Подключено · ВНИМАНИЕ: init частичный');
+      _toast(
+          context,
+          st.initOk
+              ? 'Подключено · init OK · ${st.ecuId}'
+              : 'Подключено · ВНИМАНИЕ: init частичный');
       notifier.startPolling();
     } else {
       _toast(context, 'Не удалось подключиться к адаптеру');
@@ -102,7 +117,9 @@ class ConnectionCard extends ConsumerWidget {
                 Text(
                   st.isPolling
                       ? 'На связи'
-                      : (st.isConnected ? 'Подключен' : 'Выберите ELM327 адаптер'),
+                      : (st.isConnected
+                          ? 'Подключен'
+                          : 'Выберите ELM327 адаптер'),
                   style: TextStyle(
                     fontSize: T.sm,
                     fontWeight: FontWeight.w800,
@@ -125,8 +142,8 @@ class ConnectionCard extends ConsumerWidget {
               foregroundColor: st.isPolling ? c.error : c.accent,
               elevation: 0,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              shape:
-                  RoundedRectangleBorder(borderRadius: BorderRadius.circular(R.md)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(R.md)),
             ),
             onPressed: () async {
               if (st.isPolling) {
@@ -138,116 +155,8 @@ class ConnectionCard extends ConsumerWidget {
               }
             },
             child: Text(st.isPolling ? 'Стоп' : 'Старт',
-                style:
-                    const TextStyle(fontSize: T.sm, fontWeight: FontWeight.w800)),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Карточка бортового компьютера (пробег/расход/мгновенный).
-class TripCard extends StatelessWidget {
-  const TripCard({super.key, required this.calc, required this.onReset});
-
-  final TripCalculator calc;
-  final VoidCallback onReset;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.appColors;
-    final isMoving = calc.totalDistanceKm > 0;
-    final instantStr = isMoving
-        ? '${calc.instantFuelL100Km.toStringAsFixed(1)} л/100'
-        : '${calc.instantFuelLpH.toStringAsFixed(2)} л/ч';
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: S.s4, vertical: S.s3),
-      decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(R.lg),
-        border: Border.all(color: c.border),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _stat(context, 'ПРОБЕГ', '${calc.totalDistanceKm.toStringAsFixed(1)} км'),
-          Container(width: 1, height: 24, color: c.border),
-          _stat(context, 'СРЕДНИЙ',
-              '${calc.averageConsumptionL100Km.toStringAsFixed(1)} л/100'),
-          Container(width: 1, height: 24, color: c.border),
-          _stat(context, 'МГНОВ.', instantStr),
-          IconButton(
-            icon: Icon(Icons.restart_alt, size: 18, color: c.text3),
-            tooltip: 'Сбросить поездку',
-            onPressed: onReset,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _stat(BuildContext context, String label, String val) {
-    final c = context.appColors;
-    return Column(
-      children: [
-        Text(label,
-            style: TextStyle(
-                fontSize: 9, fontWeight: FontWeight.w800, color: c.text3)),
-        const SizedBox(height: S.s1),
-        Text(val, style: AppTheme.mono(size: T.sm)),
-      ],
-    );
-  }
-}
-
-/// Плашка телеметрии.
-class SensorCard extends StatelessWidget {
-  const SensorCard({
-    super.key,
-    required this.title,
-    required this.value,
-    required this.unit,
-    required this.isLive,
-  });
-
-  final String title;
-  final String value;
-  final String unit;
-  final bool isLive;
-
-  @override
-  Widget build(BuildContext context) {
-    final c = context.appColors;
-    return Container(
-      padding: const EdgeInsets.all(S.s3),
-      decoration: BoxDecoration(
-        color: c.surface,
-        borderRadius: BorderRadius.circular(R.md),
-        border: Border(
-          left: BorderSide(color: isLive ? c.success : c.border, width: 4),
-          top: BorderSide(color: c.border),
-          right: BorderSide(color: c.border),
-          bottom: BorderSide(color: c.border),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(title,
-              style: TextStyle(
-                  fontSize: T.cap, fontWeight: FontWeight.bold, color: c.text3)),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
-            children: [
-              Text(value,
-                  style: AppTheme.mono(size: value.length > 6 ? T.sm : T.lg)),
-              const SizedBox(width: S.s1),
-              Text(unit, style: TextStyle(fontSize: T.cap, color: c.text3)),
-            ],
+                style: const TextStyle(
+                    fontSize: T.sm, fontWeight: FontWeight.w800)),
           ),
         ],
       ),
@@ -256,10 +165,24 @@ class SensorCard extends StatelessWidget {
 }
 
 /// Параметры М86 (UDS) — честные значения: не читается → «—».
+/// Статусы (2026-10-30, утренний дамп): rpm/ect@3 — ожидают синхронной пары
+/// ≤1 c (ТОЖ@3: 9 пар↔0105, Δ≤1.8); iat@33/ltft/stft/volt — кандидаты;
+/// ect@54 отозван (0x77-константа во всех 321 кадре).
+/// Тап по строке — справка: норма (M86Specs/ТИ) и причины отклонения.
 class ExtendedParamsCard extends StatelessWidget {
-  const ExtendedParamsCard({super.key, required this.data});
+  const ExtendedParamsCard(
+      {super.key,
+      required this.data,
+      this.udsStatus = '—',
+      this.minVoltage,
+      this.maxEct});
 
   final Map<String, double> data;
+  final String udsStatus;
+
+  /// Сессионные экстремумы (П5): мин. напряжение АКБ и макс. ТОЖ.
+  final double? minVoltage;
+  final double? maxEct;
 
   @override
   Widget build(BuildContext context) {
@@ -274,40 +197,101 @@ class ExtendedParamsCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('ПАРАМЕТРЫ М86 (UDS 220001)',
-              style: TextStyle(color: c.text3, fontWeight: FontWeight.bold)),
+          Row(
+            children: [
+              Expanded(
+                child: Text('ПАРАМЕТРЫ М86 (UDS 220001)',
+                    style:
+                        TextStyle(color: c.text3, fontWeight: FontWeight.bold)),
+              ),
+              Text('тап — норма',
+                  style: TextStyle(fontSize: T.cap, color: c.text3)),
+            ],
+          ),
           Divider(color: c.border),
-          // Реверс 220001 (дамп 2026-10-29): подтверждённые параметры блока —
-          // для полевой сверки с Mode 01 (значения должны совпадать)
-          _row(context, 'Обороты (UDS)',
-              data['uds_rpm'] != null ? '${data['uds_rpm']!.toInt()} об/мин' : '—'),
-          _row(context, 'ТОЖ (UDS)',
-              data['uds_ect'] != null ? '${data['uds_ect']!.toInt()} °C' : '—'),
-          _row(context, 'LTFT (UDS)',
-              data['uds_ltft'] != null ? '${data['uds_ltft']!.toStringAsFixed(1)} %' : '—'),
-          _row(context, 'Бортсеть (UDS)',
-              data['uds_volt'] != null ? '${data['uds_volt']!.toStringAsFixed(1)} В' : '—'),
+          _row(
+              context,
+              'Обороты (UDS @4..5)',
+              data['uds_rpm'] != null
+                  ? '${data['uds_rpm']!.toInt()} об/мин'
+                  : '—',
+              specKey: 'uds_rpm'),
+          _row(
+              context,
+              'ТОЖ (UDS @3)',
+              data['uds_ect'] != null
+                  ? '${data['uds_ect']!.toStringAsFixed(1)} °C'
+                  : '—',
+              specKey: 'uds_ect'),
+          _row(
+              context,
+              'LTFT (UDS)',
+              data['uds_ltft'] != null
+                  ? '${data['uds_ltft']!.toStringAsFixed(1)} %'
+                  : '—',
+              specKey: 'uds_ltft'),
+          _row(
+              context,
+              'Бортсеть (UDS)',
+              data['uds_volt'] != null
+                  ? '${data['uds_volt']!.toStringAsFixed(1)} В'
+                  : '—',
+              specKey: 'uds_volt'),
           // Mode 06 (0621) отвечает, но структура TBD: пропуски не хардкодим
           _row(context, 'Пропуски Цил. 1-4', 'TBD (0621)'),
-          _row(context, 'ДАД (010B)', 'НЕТ ДАННЫХ'),
+          _row(context, 'ДАД (010B)', 'НЕТ ДАННЫХ', specKey: 'map'),
           _row(context, 'Воздух (расчётный)',
-              '${data['air_mass_kgh']?.toStringAsFixed(1) ?? '—'} кг/ч'),
+              '${data['air_mass_kgh']?.toStringAsFixed(1) ?? '—'} кг/ч',
+              specKey: 'air'),
+          // Честный статус чтения блока (H2): OK / сверка 010C / отказ+причина
+          Divider(color: c.border),
+          Tooltip(
+            message: '«OK» — кадр принят; сверка с 010C — при паре ≤1 c. '
+                '«Отказ» — кадр отброшен валидатором (последние значения '
+                'сохранены, следующий кадр обычно чистый). «—» — сверки ещё нет.',
+            child: Text('220001: $udsStatus',
+                style: AppTheme.mono(size: T.cap, color: c.text3)),
+          ),
+          const SizedBox(height: 2),
+          Text(
+              'Оборотов два источника: «ОБОРОТЫ · 010C» (Mode 01) и «Обороты (UDS @4..5)» — сверка при паре ≤1 c',
+              style: TextStyle(fontSize: T.cap, color: c.text3)),
+          const SizedBox(height: 2),
+          Text(
+              'ТОЖ/ДТВ @3/@33: кандидаты (0.75·raw−48) · ect@54 отозван (0x77-константа, 321 кадр)',
+              style: TextStyle(fontSize: T.cap, color: c.text3)),
+          const SizedBox(height: 2),
+          Text(
+              'За сессию: мин. АКБ ${minVoltage?.toStringAsFixed(2) ?? '—'} В · '
+              'макс. ТОЖ ${maxEct?.toStringAsFixed(0) ?? '—'} °C',
+              style: TextStyle(fontSize: T.cap, color: c.text3)),
         ],
       ),
     );
   }
 
-  Widget _row(BuildContext context, String title, String val) {
+  Widget _row(BuildContext context, String title, String val,
+      {String? specKey}) {
     final c = context.appColors;
-    return Padding(
+    final isOut = specKey != null &&
+        checkSpec(specKey, data).status == SpecStatus.out;
+    final row = Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(title, style: TextStyle(fontSize: T.sm, color: c.text2)),
-          Text(val, style: AppTheme.mono(size: T.sm, color: c.accent)),
+          Text(val,
+              style: AppTheme.mono(
+                  size: T.sm, color: isOut ? c.warning : c.accent)),
         ],
       ),
+    );
+    if (specKey == null) return row;
+    return InkWell(
+      onTap: () =>
+          showSpecSheet(context, specKey: specKey, data: data, currentText: val),
+      child: row,
     );
   }
 }

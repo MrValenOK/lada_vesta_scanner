@@ -2,17 +2,25 @@ import 'dart:convert';
 import 'dart:io';
 
 class OtaService {
-  // Релизы проекта на GitHub (OTA-проверка)
-  static const String currentVersion = '2.0.0';
-  static const String githubRepo = 'MrValenOK/lada_vesta_scanner';
+  // Версия приложения — из pubspec.yaml (version: 2.1.0+1); менять вместе с pubspec.
+  static const String currentVersion = '2.1.0+1';
 
-  static Future<Map<String, dynamic>?> checkForUpdates() async {
+  // Репозиторий релизов ПРОЕКТА (владелец/имя), а не чужой старый.
+  // Пока проект не опубликован — пусто: проверка честно отказывает и НИЧЕГО не предлагает.
+  // П8: после публикации в GitHub вписать сюда 'владелец/репозиторий'.
+  static const String projectRepo = '';
+
+  static Future<Map<String, dynamic>> checkForUpdates() async {
+    if (projectRepo.isEmpty) {
+      return {'hasUpdate': false, 'error': 'REPO_NOT_PUBLISHED'};
+    }
+
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 5); // Уменьшили с 8
 
     try {
       final req = await client.getUrl(
-        Uri.parse('https://api.github.com/repos/$githubRepo/releases/latest'),
+        Uri.parse('https://api.github.com/repos/$projectRepo/releases/latest'),
       );
       req.headers.set('User-Agent', 'VestaScanPro-App');
       req.headers.set('Accept', 'application/vnd.github+json');
@@ -26,7 +34,7 @@ class OtaService {
         final tagName = (data['tag_name'] ?? currentVersion).toString();
         final notes = (data['body'] ?? '').toString().trim();
         
-        String apkUrl = 'https://github.com/$githubRepo/releases/latest/download/app-release.apk';
+        String apkUrl = 'https://github.com/$projectRepo/releases/latest/download/app-release.apk';
         if (data['assets'] is List && (data['assets'] as List).isNotEmpty) {
           for (final asset in (data['assets'] as List)) {
             final name = (asset['name'] ?? '').toString().toLowerCase();
@@ -46,22 +54,17 @@ class OtaService {
           'apkUrl': apkUrl,
         };
       }
-    } catch (e) {
-      // Не молчим — возвращаем специальный маркер, что API недоступен,
-      // но даем возможность открыть страницу релизов напрямую.
-      return {
-        'hasUpdate': false,
-        'error': 'API_UNREACHABLE',
-        'fallbackUrl': 'https://github.com/$githubRepo/releases/latest',
-      };
+
+      // Репозиторий проекта не найден (ещё не опубликован или переименован).
+      if (resp.statusCode == 404) {
+        return {'hasUpdate': false, 'error': 'REPO_NOT_PUBLISHED'};
+      }
+    } catch (_) {
+      // Сеть/GitHub недоступны — честный отказ ниже; чужой репозиторий не предлагаем.
     } finally {
       client.close(force: true);
     }
-    return {
-      'hasUpdate': false,
-      'error': 'API_UNREACHABLE',
-      'fallbackUrl': 'https://github.com/$githubRepo/releases/latest',
-    };
+    return {'hasUpdate': false, 'error': 'API_UNREACHABLE'};
   }
 
   // Сравнение версий (например, v2.2.0 > v2.1.0)

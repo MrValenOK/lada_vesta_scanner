@@ -15,18 +15,17 @@ Future<void> runOtaCheck(BuildContext context) async {
   final result = await OtaService.checkForUpdates();
   if (!context.mounted) return;
 
-  if (result == null || result['error'] == 'API_UNREACHABLE') {
-    messenger.showSnackBar(SnackBar(
-      content: const Text('GitHub API недоступен (частая блокировка в РФ)'),
-      action: SnackBarAction(
-        label: 'Открыть релизы',
-        onPressed: () => launchUrl(
-          Uri.parse((result?['fallbackUrl'] as String?) ??
-              'https://github.com/MrValenOK/lada_vesta_scanner/releases/latest'),
-          mode: LaunchMode.externalApplication,
-        ),
-      ),
-    ));
+  if (result['error'] == 'REPO_NOT_PUBLISHED') {
+    messenger.showSnackBar(const SnackBar(
+        content:
+            Text('Обновления недоступны (репозиторий ещё не опубликован)')));
+    return;
+  }
+
+  if (result['error'] == 'API_UNREACHABLE') {
+    messenger.showSnackBar(const SnackBar(
+        content:
+            Text('Не удалось проверить обновления (нет сети или GitHub недоступен)')));
     return;
   }
 

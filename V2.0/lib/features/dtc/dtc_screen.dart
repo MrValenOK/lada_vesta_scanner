@@ -1,8 +1,10 @@
-// lib/features/dtc/dtc_screen.dart — коды неисправностей (Mode 03/07 + стоп-кадр).
+// lib/features/dtc/dtc_screen.dart — коды неисправностей (Mode 03/07 + UDS
+// 19 02 FF + стоп-кадр Mode 02) с расшифровкой из kM86DtcDatabase (ТИ 3100...).
 // Портировано из lada_vesta_scanner; цвета — только токены AppColors.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/constants.dart';
 import '../../core/theme.dart';
 import '../../providers/obd_provider.dart';
 
@@ -98,6 +100,12 @@ class _DtcScreenState extends ConsumerState<DtcScreen> {
               ],
             ),
             const SizedBox(height: S.s6),
+            if (_hasScanned && _dtcs.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: S.s2),
+                child: Text('Тап по коду — стоп-кадр параметров (Mode 02)',
+                    style: TextStyle(fontSize: T.cap, color: c.text3)),
+              ),
             Expanded(
               child: !_hasScanned
                   ? Center(
@@ -137,8 +145,14 @@ class _DtcScreenState extends ConsumerState<DtcScreen> {
                                   title: Text(code,
                                       style: AppTheme.mono(
                                           size: T.md, color: c.error)),
-                                  subtitle: Text('Нажмите для просмотра стоп-кадра',
-                                      style: TextStyle(color: c.text3, fontSize: 12)),
+                                  subtitle: Text(
+                                      kM86DtcDatabase[code] ??
+                                          'Нет описания в базе М86 '
+                                              '(ТИ 3100.25100.12056)',
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                          color: c.text2, fontSize: 12)),
                                   trailing: Icon(Icons.chevron_right, color: c.text3),
                                 ),
                               ),
@@ -204,6 +218,12 @@ class _DtcScreenState extends ConsumerState<DtcScreen> {
                             child: CircularProgressIndicator(strokeWidth: 2)),
                     ],
                   ),
+                  const SizedBox(height: S.s2),
+                  Text(
+                      kM86DtcDatabase[code] ??
+                          'Нет описания в базе М86 (ТИ 3100.25100.12056)',
+                      style:
+                          TextStyle(fontSize: T.sm, color: c.text2, height: 1.3)),
                   const SizedBox(height: S.s4),
                   if (_freezeFrameData.isEmpty)
                     Text('Запрос данных у ЭБУ...', style: TextStyle(color: c.text3))

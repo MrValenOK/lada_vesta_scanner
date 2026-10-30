@@ -6,9 +6,23 @@
 //
 // В V2.0 удалены мёртвые классы IsoTpAssembler/ParameterConfig/cleanResponse —
 // их никто не вызывал, а декодирование значений выполняет EcuParameter.decode()
-// из lib/data/models (схема m86_uds.json с width/multiplier/divisor/offset).
+// из lib/data/models (схема m86_uds.json с width/multiplier/addend/offset).
+
+/// Единый тип «отправка ELM-команды» для сервисов, вынесенных из провайдера.
+typedef ElmSendCommand = Future<String> Function(String cmd,
+    {int timeoutMs, int postDelayMs});
 
 class ObdParser {
+  /// Единственный путь формирования запроса ReadDataByIdentifier (service 0x22):
+  /// DID — ЧИСЛО, команда = '22' + DID_HI + DID_LO.
+  /// DID 0x0001 -> '220001'; DID 0x2001 -> '222001' — это РАЗНЫЕ DID!
+  static String buildReadDidCommand(int did) =>
+      '22${(did & 0xFFFF).toRadixString(16).padLeft(4, '0').toUpperCase()}';
+
+  /// Ожидаемый префикс положительного ответа: '62' + эхо DID (0x0001 -> '620001').
+  static String positiveDidPrefix(int did) =>
+      '62${(did & 0xFFFF).toRadixString(16).padLeft(4, '0').toUpperCase()}';
+
   /// Проверенный ISO 15765-2 экстрактор байтов из ответа ELM327.
   /// [expectedPrefix] — префикс ответа, например '410C' или '62F190'.
   /// Возвращает payload ПОСЛЕ префикса либо null (ошибка/NRC/нет данных).
@@ -92,6 +106,19 @@ class ObdParser {
       return bytes.sublist(0, payloadMaxLen);
     }
     return bytes;
+  }
+
+  /// Печатаемые ASCII-символы payload (32..126) с обрезкой пробелов:
+  /// паспортные DID М86 (0904/220091/220097/22009A) отдают текст с паддингом.
+  /// null — нечего декодировать (нет ответа/только паддинг).
+  static String? decodeAscii(List<int>? payload) {
+    if (payload == null || payload.isEmpty) return null;
+    final chars = payload
+        .where((b) => b >= 32 && b <= 126)
+        .map(String.fromCharCode)
+        .join()
+        .trim();
+    return chars.isEmpty ? null : chars;
   }
 
   /// Счётчик Mode 06 (пропуски/мониторы): двухбайтовое значение с учётом

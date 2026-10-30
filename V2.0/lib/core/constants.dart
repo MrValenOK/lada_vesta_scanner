@@ -36,6 +36,7 @@ abstract class M86Specs {
   static const double rpmIdleTol = 40;
   static const double rpm3000 = 3000;
   static const double rpm3000Tol = 100;
+  static const double idleTpsMaxPct = 4.5; // признак ХХ: ДЗ ниже порога (старая версия, ТИ)
 
   // ── Воздух / нагрузка ──
   static const double airFlowIdleMin = 7.0; // кг/ч
@@ -69,6 +70,27 @@ abstract class M86Specs {
   static const double p2187Limit = 5.0; // порог кода Р2187 (бедная смесь на ХХ)
   static const double stftRetestTol = 0.1; // проверка после ремонта: 1±0,1
 
+  // ── Матрица самообучения коррекций по зонам (ЛИСТ 19; порт 5335a2e, M2) ──
+  // Границы зон — по оборотам (в источнике зона определялась rpm+ДЗ+ДАД).
+  static const double trimZoneLowRpm = 1100; // ХХ < 1100 ≤ малые
+  static const double trimZonePartRpm = 2200; // малые < 2200 ≤ частичные
+  static const double trimZoneHighRpm = 3400; // частичные < 3400 ≤ высокие
+  static const double trimHardLimitPct = 25.0; // жёсткий предел сэмпла (+5 → 30 %)
+  static const double trimTpsMaxPct = 70.0; // выше — режим не для матрицы
+  static const double trimDfcoRpmMin = 1800; // ПХХ: rpm > порога и…
+  static const double trimDfcoTpsMax = 2.2; // …ДЗ ниже порога
+  static const double o2ColdRefMinV = 1.18; // «непрогретый ДК»: окно 1.18–1.78 В
+  static const double o2ColdRefMaxV = 1.78;
+
+  // ── Матрица: условия накопления и пороги вердикта (П3) ──
+  static const double trimRunRpmMin = 400; // ниже — ДВС не вращается: не замер
+  static const int trimStartupGraceSec = 20; // первые секунды пуска не копим
+  static const int trimMinZoneSamples = 5; // порог вердикта (как в источнике)
+  static const double trimNormOkPct = 7.0; // норма: |Total Trim| ≤ 7 % во всех зонах
+  static const double trimLeakIdlePct = 8.0; // подсос: ХХ ≥ +8 % при норме под нагрузкой
+  static const double trimLeanLoadPct = 8.0; // нехватка топлива: част./высок. ≥ +8 %
+  static const double trimRichPct = -8.0; // перелив: ≤ −8 % во всех зонах с данными
+
   // ── Датчики кислорода, В ──
   static const double udkMin = 0.18; // прогретый УДК
   static const double udkMax = 0.95;
@@ -78,6 +100,17 @@ abstract class M86Specs {
   static const double probeReadyMinV = 1.2; // окно готовности ДК
   static const double probeReadyMaxV = 1.7;
   static const double udkPeriodMaxSec = 1.8;
+
+  // ── Поездка/БК (П4) ──
+  static const double fuelIdleLpHMin = 0.7; // практическая норма ХХ 1.6 л (владелец)
+  static const double fuelIdleLpHMax = 0.9;
+  static const double fuelFactorMin = 0.50; // диапазон калибровочного коэффициента
+  static const double fuelFactorMax = 1.50;
+  static const double fuelFactorDefault = 1.00; // поправка БК до калибровки
+  static const double tripMovingKmh = 3.0; // выше — мгновенный расход в л/100 км
+  static const double tripCalibrationMinLiters = 5.0; // меньше — чек недостоверен
+  static const double fuelStoichRatio = 14.7; // стехиометрия бензина (кг воздуха/кг топлива)
+  static const double fuelDensityKgL = 0.75; // ~0.75 кг/л при 15–20 °C
 
   // ── Нейтрализатор / пропуски ──
   static const double catalystAgeMax = 0.45; // «Фактор старения нейтрализатора» ≤

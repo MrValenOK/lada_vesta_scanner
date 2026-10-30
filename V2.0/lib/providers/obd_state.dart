@@ -42,6 +42,13 @@ class ObdState {
   final List<String> dtcList;
   final String? lastError;
 
+  /// Честный статус последнего чтения блока 220001 (OK/сверка/отказ+причина).
+  final String udsStatus;
+
+  /// Паспорт ЭСУД (только прочитанное): part=220091, model=220097,
+  /// sw_short=22009A. Пусто — не подключено/не ответило.
+  final Map<String, String> passport;
+
   ObdState({
     this.isConnected = false,
     this.isPolling = false,
@@ -58,6 +65,8 @@ class ObdState {
     this.nuances = const [],
     this.dtcList = const [],
     this.lastError,
+    this.udsStatus = '—',
+    this.passport = const {},
   });
 
   ObdState copyWith({
@@ -76,6 +85,8 @@ class ObdState {
     List<NuanceEvent>? nuances,
     List<String>? dtcList,
     String? lastError,
+    String? udsStatus,
+    Map<String, String>? passport,
   }) {
     return ObdState(
       isConnected: isConnected ?? this.isConnected,
@@ -94,6 +105,8 @@ class ObdState {
       dtcList: dtcList ?? this.dtcList,
       // Фикс V2.0: lastError НЕ стирается при каждом copyWith (в старом коде стирался).
       lastError: lastError ?? this.lastError,
+      udsStatus: udsStatus ?? this.udsStatus,
+      passport: passport ?? this.passport,
     );
   }
 }

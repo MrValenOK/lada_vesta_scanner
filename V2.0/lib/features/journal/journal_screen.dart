@@ -1,12 +1,18 @@
 // lib/features/journal/journal_screen.dart — журнал событий (HZ-группировка).
+// Экспорт П5 — настоящий CSV-файл (UTF-8 BOM, ';' — Excel ru-RU) через
+// path_provider; без share_plus: путь в SnackBar + копия в буфер обмена.
 // Портировано из lada_vesta_scanner; цвета — только токены AppColors.
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../../core/theme.dart';
 import '../../providers/obd_provider.dart';
 import '../../providers/obd_state.dart';
+import 'journal_csv.dart';
 
 class JournalScreen extends ConsumerStatefulWidget {
   const JournalScreen({super.key});
@@ -21,28 +27,41 @@ class _JournalScreenState extends ConsumerState<JournalScreen> {
   Future<void> _exportCsv() async {
     final st = ref.read(obdProvider);
     setState(() => _isExporting = true);
-    final sb = StringBuffer();
-    sb.writeln('=== VestaScan Pro V2.0 · Экспорт ===');
-    sb.writeln('Устройство: ${st.connectedDevice}');
-    sb.writeln('ЭБУ: ${st.ecuType} · Калибровка: ${st.ecuId}');
-    sb.writeln('Протокол: ${st.isUds ? 'UDS' : 'KWP-CAN'}');
-    sb.writeln('');
-    sb.writeln('--- ЖУРНАЛ ---');
-    for (final e in st.nuances) {
-      sb.writeln('[${e.timeStr}] [HZ:${e.hzCount}] '
-          '[${e.severity.name.toUpperCase()}] ${e.title}: ${e.description}');
+    final csv = JournalCsv.build(st.nuances);
+    try {
+      Directory? dir;
+      try {
+        dir = await getExternalStorageDirectory(); // Android: видимая папка
+      } catch (_) {
+        // Не Android — берём документы приложения.
+      }
+      dir ??= await getApplicationDocumentsDirectory();
+      final stamp = _stamp(DateTime.now());
+      final file = File('${dir.path}/vestascan_journal_$stamp.csv');
+      await file.writeAsBytes(JournalCsv.bytes(csv), flush: true);
+      await Clipboard.setData(ClipboardData(text: csv));
+      if (!mounted) return;
+      setState(() => _isExporting = false);
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('CSV сохранён: ${file.path}\n'
+            'Копия CSV — в буфере обмена.'),
+        duration: const Duration(seconds: 8),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isExporting = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Не удалось сохранить CSV: $e')));
     }
-    sb.writeln('');
-    sb.writeln('--- ПАРАМЕТРЫ ---');
-    st.liveData.forEach((k, v) => sb.writeln('$k: $v'));
-    await Clipboard.setData(ClipboardData(text: sb.toString()));
-    if (!mounted) return;
-    setState(() => _isExporting = false);
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text('✅ Экспорт скопирован в буфер обмена'),
-      duration: Duration(seconds: 5),
-    ));
   }
+
+  static String _stamp(DateTime t) =>
+      '${t.year.toString().padLeft(4, '0')}'
+      '${t.month.toString().padLeft(2, '0')}'
+      '${t.day.toString().padLeft(2, '0')}_'
+      '${t.hour.toString().padLeft(2, '0')}'
+      '${t.minute.toString().padLeft(2, '0')}'
+      '${t.second.toString().padLeft(2, '0')}';
 
   Future<void> _clearJournal() async {
     final c = context.appColors;

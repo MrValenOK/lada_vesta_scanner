@@ -1,18 +1,93 @@
 {
   "id": "m86_uds",
   "name": "Итэлма М86 (блок 220001, default session)",
-  "note": "Реверс по живому дампу 2026-10-29 (МОНИТОРИНГ 220001, газование): подтверждено — rpm@4 (2Б, /4), ect@54 (1Б, -40), ltft@27 ((A-128)*100/128); кандидаты — stft@22, volt@1 (/10). TBD: @3 (медленно растёт), @7 (УОЗ/дроссель?), @21 (нагрузка?), @33. 220001 читается в DEFAULT session (без 1003).",
+  "note": "Каноническая модель: value = raw * multiplier + addend; позиция поля = byteOffset (DATA после 62 DID_H DID_L); DID — число, команда собирается ObdParser.buildReadDidCommand. Реверс 2026-10-29/30: rpm@4 — observed_pending_synchronous_crosscheck (0D38↔010C, пары ≤1 c не сняты); ect@3 — observed_pending_synchronous_crosscheck: ТОЖ = 0.75·raw−48 (0x40 = 0 °C), 9 пар↔0105, Δ≤1.8 °C (один выброс 2.8 на прогреве, пары 2–5 c); iat@33 — candidate (та же сетка; кросс-чек 010F не снят); ect@54 ОТОЗВАН — 0x77 константа во всех 321 кадре (не ТОЖ); ltft@27 — candidate (0x7B = -3.9%, без синхронной пары); stft@22, volt@1 — candidate. Якорь [56..58]=3A A5 9B — эмпирический (дампы 2026-10-29/30), проверять на новых SWID.",
   "blocks": [
     {
       "name": "Блок 220001 (реверс 2026-10-29)",
-      "kwpCommand": "2101",
-      "udsCommand": "220001",
+      "did": 1,
+      "validators": {
+        "expectedDataLengthBytes": 64,
+        "tailAnchor": {
+          "byteOffset": 56,
+          "bytes": "3A A5 9B",
+          "note": "эмпирический якорь целостности; разрушался при CF-порче (кадры 15:52:44/45/49)"
+        },
+        "maxRateHz": 0.2
+      },
       "parameters": [
-        { "id": "uds_rpm", "name": "Обороты (UDS)", "byteOffset": 4, "width": 2, "divisor": 4.0, "unit": "об/мин", "note": "подтверждено: совпадает с 010C" },
-        { "id": "uds_ect", "name": "ТОЖ (UDS)", "byteOffset": 54, "width": 1, "offset": -40.0, "unit": "°C", "note": "подтверждено: совпадает с 0105" },
-        { "id": "uds_ltft", "name": "LTFT (UDS)", "byteOffset": 27, "width": 1, "multiplier": 100.0, "divisor": 128.0, "offset": -100.0, "decimals": 1, "unit": "%", "note": "подтверждено: совпадает с 0107 (-3.9%)" },
-        { "id": "uds_stft", "name": "STFT (UDS)", "byteOffset": 22, "width": 1, "multiplier": 100.0, "divisor": 128.0, "offset": -100.0, "decimals": 1, "unit": "%", "note": "кандидат: диапазон совпадает с 0106" },
-        { "id": "uds_volt", "name": "Бортсеть (UDS)", "byteOffset": 1, "width": 1, "divisor": 10.0, "decimals": 1, "unit": "В", "note": "кандидат: 14.1–14.2 В" }
+        {
+          "id": "uds_rpm",
+          "name": "Обороты (UDS)",
+          "byteOffset": 4,
+          "width": 2,
+          "multiplier": 0.25,
+          "addend": 0.0,
+          "decimals": 0,
+          "unit": "об/мин",
+          "status": "observed_pending_synchronous_crosscheck",
+          "note": "формула /4 устойчива (0D38↔010C, ХХ 826-925); синхронная пара ≤1 c не снята (H3)"
+        },
+        {
+          "id": "uds_ect",
+          "name": "ТОЖ (UDS)",
+          "byteOffset": 3,
+          "width": 1,
+          "multiplier": 0.75,
+          "addend": -48.0,
+          "decimals": 1,
+          "unit": "°C",
+          "status": "observed_pending_synchronous_crosscheck",
+          "note": "ТОЖ = 0.75·raw−48 (0x40 = 0 °C). 9 пар↔0105 (2–54 c): Δ≤1.8 °C, кроме 14:36:48 (2.8, быстрый прогрев); строго синхронной пары ≤1 c нет (H3). ect@54 остаётся отозванным (0x77 — константа)"
+        },
+        {
+          "id": "uds_iat",
+          "name": "ДТВ (UDS)",
+          "byteOffset": 33,
+          "width": 1,
+          "multiplier": 0.75,
+          "addend": -48.0,
+          "decimals": 1,
+          "unit": "°C",
+          "status": "candidate",
+          "note": "та же сетка 0.75·raw−48; холодный пуск +3.8..4.5 °C, прогрев до +20.3, тёплый гараж +34.5..45.8; кросс-чек с 010F не снят (010F вне AUTO-DUMP)"
+        },
+        {
+          "id": "uds_ltft",
+          "name": "LTFT (UDS)",
+          "byteOffset": 27,
+          "width": 1,
+          "multiplier": 0.78125,
+          "addend": -100.0,
+          "decimals": 1,
+          "unit": "%",
+          "status": "candidate",
+          "note": "0x7B = -3.9%, совпадает с 0107 в окнах дампов; байт не менялся ни в одной сессии — отличать от константы только синхронным захватом"
+        },
+        {
+          "id": "uds_stft",
+          "name": "STFT (UDS)",
+          "byteOffset": 22,
+          "width": 1,
+          "multiplier": 0.78125,
+          "addend": -100.0,
+          "decimals": 1,
+          "unit": "%",
+          "status": "candidate",
+          "note": "0x7B..0x90; числовых совпадений с 0106 нет — только гипотеза"
+        },
+        {
+          "id": "uds_volt",
+          "name": "Бортсеть (UDS)",
+          "byteOffset": 1,
+          "width": 1,
+          "multiplier": 0.1,
+          "addend": 0.0,
+          "decimals": 1,
+          "unit": "В",
+          "status": "candidate",
+          "note": "0x87..0x8E ~ 13.5-14.2 В; синхронной пары с ATRV нет"
+        }
       ]
     }
   ]
